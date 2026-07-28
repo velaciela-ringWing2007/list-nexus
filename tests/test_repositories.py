@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from constants import DUPLICATE_ERROR, DUPLICATE_SKIP, DUPLICATE_UPDATE
 from database import DatabaseError, connect, transaction
-from models import SharePointList, ValidationError, build_list, tags_from_json
+from import_parser import parse_json_text
+from models import (
+    SharePointList,
+    ValidationError,
+    build_list,
+    tags_from_json,
+    to_export_dict,
+)
 from repositories import (
     DuplicateUrlError,
     ListRepository,
     filter_lists,
     group_by_group_name,
     matches_query,
+    save_import_items,
 )
 
 ISSUES_URL = "https://example.sharepoint.com/sites/dev/Lists/Issues/AllItems.aspx"
@@ -300,6 +310,101 @@ class TestValidationInBuildList:
     def test_sort_order_must_be_integer(self) -> None:
         with pytest.raises(ValidationError):
             build_list(name="x", list_url=ISSUES_URL, sort_order="いち")
+
+
+class TestSaveImportItems:
+    def test_creates_new_items(self, repo: ListRepository) -> None:
+        summary = save_import_items(
+            repo,
+            [make_list(), make_list(name="端末管理", list_url=DEVICES_URL)],
+        )
+        assert (summary.created, summary.updated, summary.skipped) == (2, 0, 0)
+        assert summary.errors == []
+        assert repo.count() == 2
+
+    def test_skip_policy_keeps_existing(self, repo: ListRepository) -> None:
+        repo.create(make_list())
+        summary = save_import_items(repo, [make_list(name="別名")], DUPLICATE_SKIP)
+        assert (summary.created, summary.updated, summary.skipped) == (0, 0, 1)
+        stored = repo.get_by_url(ISSUES_URL)
+        assert stored is not None
+        assert stored.name == "障害管理"
+
+    def test_update_policy_overwrites_existing(self, repo: ListRepository) -> None:
+        created = repo.create(make_list())
+        summary = save_import_items(
+            repo, [make_list(name="別名", group_name="運用")], DUPLICATE_UPDATE
+        )
+        assert (summary.created, summary.updated, summary.skipped) == (0, 1, 0)
+        stored = repo.get_by_id(created.id or 0)
+        assert stored is not None
+        assert stored.name == "別名"
+        assert stored.group_name == "運用"
+        assert repo.count() == 1
+
+    def test_error_policy_reports_and_keeps_existing(self, repo: ListRepository) -> None:
+        repo.create(make_list())
+        summary = save_import_items(repo, [make_list(name="別名")], DUPLICATE_ERROR)
+        assert (summary.created, summary.updated, summary.skipped) == (0, 0, 0)
+        assert len(summary.errors) == 1
+        stored = repo.get_by_url(ISSUES_URL)
+        assert stored is not None
+        assert stored.name == "障害管理"
+
+    def test_mixed_new_and_duplicate(self, repo: ListRepository) -> None:
+        repo.create(make_list())
+        summary = save_import_items(
+            repo,
+            [make_list(name="別名"), make_list(name="端末管理", list_url=DEVICES_URL)],
+            DUPLICATE_SKIP,
+        )
+        assert (summary.created, summary.updated, summary.skipped) == (1, 0, 1)
+        assert summary.saved == 1
+        assert repo.count() == 2
+
+    def test_exported_json_round_trip(self, repo: ListRepository) -> None:
+        """エクスポートしたJSONを再インポートしても内容が保たれる。"""
+        repo.create(make_list())
+        payload = json.dumps(
+            {
+                "schemaVersion": 1,
+                "exportedAt": "2026-07-27T15:30:00+09:00",
+                "lists": [to_export_dict(item) for item in repo.list_all()],
+            },
+            ensure_ascii=False,
+        )
+
+        restored = ListRepository(repo.db_path.parent / "restored.sqlite3")
+        restored.initialize()
+        entries = parse_json_text(payload).valid_entries
+        summary = save_import_items(
+            restored,
+            [
+                build_list(
+                    name=entry.name,
+                    list_url=entry.list_url,
+                    new_item_url=entry.new_item_url,
+                    settings_url=entry.settings_url,
+                    site_name=entry.site_name,
+                    group_name=entry.group_name,
+                    tags=entry.tags,
+                    environment=entry.environment,
+                    description=entry.description,
+                    favorite=entry.favorite,
+                    sort_order=entry.sort_order,
+                )
+                for entry in entries
+            ],
+        )
+        assert summary.created == 1
+        original = repo.list_all()[0]
+        copied = restored.list_all()[0]
+        assert (copied.name, copied.list_url, copied.tags, copied.environment) == (
+            original.name,
+            original.list_url,
+            original.tags,
+            original.environment,
+        )
 
 
 class TestFilters:

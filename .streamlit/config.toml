@@ -1,0 +1,16 @@
+# ローカル専用アプリのため、127.0.0.1 のみで待ち受ける。
+# 秘密情報は保存しない（.streamlit/secrets.toml は使用しない）。
+[server]
+address = "127.0.0.1"
+port = 8501
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#22d3ee"
+backgroundColor = "#070b16"
+secondaryBackgroundColor = "#0e1526"
+textColor = "#dbe6ff"

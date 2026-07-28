@@ -6,11 +6,16 @@ SQLはこのモジュールに閉じ込め、UI層からSQLite接続を直接扱
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from constants import UNCATEGORIZED_GROUP
+from constants import (
+    DUPLICATE_ERROR,
+    DUPLICATE_SKIP,
+    DUPLICATE_UPDATE,
+    UNCATEGORIZED_GROUP,
+)
 from database import DatabaseError, connect, initialize_database, transaction
 from models import (
     SharePointList,
@@ -230,6 +235,57 @@ class ListRepository:
                 """
             ).fetchall()
         return [row["environment"] for row in rows]
+
+
+# ----------------------------------------------------------------------
+# インポートの保存（重複時の動作を適用する）
+# ----------------------------------------------------------------------
+@dataclass(slots=True)
+class ImportSummary:
+    """インポート結果の集計."""
+
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def saved(self) -> int:
+        return self.created + self.updated
+
+
+def save_import_items(
+    repository: ListRepository,
+    items: Sequence[SharePointList],
+    policy: str = DUPLICATE_SKIP,
+) -> ImportSummary:
+    """検証済みのリストを保存する。一覧URLが重複する場合は policy に従う。
+
+    - DUPLICATE_SKIP: 既存を残して読み飛ばす
+    - DUPLICATE_UPDATE: 既存レコードを上書きする
+    - DUPLICATE_ERROR: エラーとして記録し、保存しない
+    """
+    summary = ImportSummary()
+
+    for item in items:
+        existing = repository.get_by_url(item.list_url)
+        try:
+            if existing is None:
+                repository.create(item)
+                summary.created += 1
+            elif policy == DUPLICATE_UPDATE:
+                repository.update(replace(item, id=existing.id))
+                summary.updated += 1
+            elif policy == DUPLICATE_ERROR:
+                summary.errors.append(
+                    f"{item.name}: 一覧URLが既に登録されています（{existing.name}）。"
+                )
+            else:  # DUPLICATE_SKIP
+                summary.skipped += 1
+        except (DuplicateUrlError, DatabaseError) as exc:
+            summary.errors.append(f"{item.name}: {exc}")
+
+    return summary
 
 
 # ----------------------------------------------------------------------

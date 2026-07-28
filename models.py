@@ -108,6 +108,25 @@ def list_to_params(item: SharePointList) -> dict[str, Any]:
     }
 
 
+def to_export_dict(item: SharePointList) -> dict[str, Any]:
+    """JSONエクスポート用の辞書へ変換する（内部IDは含めない）。"""
+    return {
+        "name": item.name,
+        "listUrl": item.list_url,
+        "newItemUrl": item.new_item_url,
+        "settingsUrl": item.settings_url,
+        "siteName": item.site_name,
+        "group": item.group_name,
+        "tags": list(item.tags),
+        "environment": item.environment,
+        "description": item.description,
+        "favorite": item.favorite,
+        "sortOrder": item.sort_order,
+        "createdAt": item.created_at,
+        "updatedAt": item.updated_at,
+    }
+
+
 def normalize_name(raw: str | None) -> str:
     """リスト名を検証して正規化する。"""
     name = (raw or "").strip()
