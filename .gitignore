@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Database and local data
+data/*.sqlite
+data/*.sqlite3
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite3-shm
+data/*.sqlite3-wal
+
+# Backup files
+*.bak
+*.backup
+
+# IDE
+.vscode/
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+cmake-build-*/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
