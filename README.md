@@ -153,6 +153,10 @@ python -m pytest
 * 行末の改行コード差分を避けるため `.gitattributes` を追加しました（`.bat` はCRLF、`.py`/`.md` はLF）。
 * エディタ設定として `.gitignore` にPyCharm（JetBrains）向けの除外（`.idea/`、`*.iml` など）を追加しました。
 
+## ライセンス
+
+MIT License です。詳細は [LICENSE](LICENSE) を参照してください。
+
 ## トラブルシューティング
 
 **`start.bat` が「Python仮想環境がありません」と表示する**
