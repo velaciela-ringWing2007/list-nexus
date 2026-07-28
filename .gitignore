@@ -38,6 +38,9 @@ data/*.sqlite3-wal
 cmake-build-*/
 out/
 
+# Claude Code (ローカル設定)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
