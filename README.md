@@ -3,7 +3,7 @@
 SharePoint Lists を大量に使うユーザー向けの、**ローカル専用リンク管理・ランチャー**です。
 
 SharePointのお気に入り機能では管理しきれない多数のリストを、リスト名・サイト名・グループ・タグ・環境などで整理し、
-一覧画面 / 新規作成画面 / 設定画面をブラウザの新しいタブで開けます。
+一覧画面や設定画面をブラウザの新しいタブで開けます。
 
 SharePointのデータそのものは読み書きしません。リンク情報だけをローカルのSQLiteに保存します。
 
@@ -14,10 +14,12 @@ SharePointのデータそのものは読み書きしません。リンク情報�
 * 絞り込み（お気に入りのみ / グループ / タグ / 環境、複数条件の組み合わせ）
 * グループ単位のセクション表示（未分類は最後に表示）
 * お気に入りの切り替え（即座にSQLiteへ保存）
-* 一覧 / 新規作成 / 設定 画面を新しいタブで起動（未登録URLのボタンは無効表示）
-* 貼り付けインポート（JSON / Markdownリンク / HTMLリンク / 名前とURL / URLのみ）
+* 一覧画面・設定画面を新しいタブで起動
+* **まとめて削除**（表ビューで行を複数選択 / 絞り込み結果を一括 / グループ単位）
+* **表ビュー**での一覧（件数が多くても軽く、並べ替えとまとめて削除ができる）
+* 貼り付けインポート（JSON / Markdownリンク / HTMLリンク / 名前とURL / URLのみ / Excelのタブ区切り）
+* Bookmarkletでサイト内の全リストを一括取得（[scripts/bookmarklets.md](scripts/bookmarklets.md)）
 * JSONバックアップのエクスポートとインポート（重複時の動作を選択可能）
-* 一覧URLからの新規作成URL候補生成（`AllItems.aspx` → `NewForm.aspx` など）
 * サイバーパンク風ダークテーマ
 
 ## 必要環境
@@ -26,6 +28,31 @@ SharePointのデータそのものは読み書きしません。リンク情報�
 * Python 3.12以上
 * Microsoft Edge などのブラウザ
 * 依存パッケージは `streamlit` と `pytest` のみ（`requirements.txt`）
+
+## 依存パッケージ
+
+`requirements.txt` に書いてあるのは **`streamlit` と `pytest` の2つだけ**です。
+このアプリのコードが使っているのは、それ以外はすべてPython標準ライブラリです
+（`sqlite3` / `json` / `re` / `html` / `urllib.parse` / `dataclasses` / `pathlib` / `logging` / `datetime`）。
+
+ただし `streamlit` 自体が多くのパッケージを連れてきます（`pip install` 後は全48個）。
+いずれも広く使われているOSSで、内訳は次のとおりです。
+
+| 用途 | パッケージ |
+| --- | --- |
+| Streamlit本体と表示 | streamlit, altair, pydeck, narwhals, pillow, pygments |
+| 表・数値処理（`st.dataframe` / `st.data_editor` が使用） | pandas, numpy, pyarrow, python-dateutil, tzdata, six |
+| Webサーバー | uvicorn, starlette, websockets, h11, httptools, anyio, python-multipart, itsdangerous |
+| 通信・データ形式 | requests, urllib3, certifi, idna, charset-normalizer, protobuf, jsonschema, jsonschema-specifications, referencing, rpds-py, attrs, toml, jinja2, markupsafe |
+| その他ユーティリティ | click, colorama, blinker, packaging, tenacity, typing_extensions, watchdog, GitPython, gitdb, smmap |
+| テスト | pytest, pluggy, iniconfig |
+
+* このアプリが自分で追加したパッケージはありません。上の表はすべてStreamlitの依存です。
+* `pandas` / `numpy` / `pyarrow` は容量が大きく（合計数百MB）、インストール時にプロキシ設定が必要な環境があります。
+* Streamlitの使用状況送信（telemetry）は `.streamlit/config.toml` の `gatherUsageStats = false` で無効化しています。
+* アプリのコードから外部へ通信する処理はありません。待ち受けも `127.0.0.1` のみです。
+* 社内でパッケージの申請や許可リストが必要な場合は、上の一覧をそのまま提出できます。
+  導入済みのバージョンを固定したい場合は `python -m pip freeze > requirements.lock.txt` で出力してください。
 
 ## セットアップ
 
@@ -114,7 +141,7 @@ python -m pytest
 | `models.py` | データモデル、入力検証、DB行・エクスポート形式との変換 |
 | `database.py` | SQLite接続、PRAGMA設定、スキーマ初期化、トランザクション |
 | `import_parser.py` | 貼り付けテキスト・JSONの解析 |
-| `url_utils.py` | URL検証、新規作成URL候補の生成 |
+| `url_utils.py` | URL検証（スキームと形式のチェック） |
 | `constants.py` | 共通定数（環境値、パス、上限値など） |
 
 ## Git管理方針
@@ -129,9 +156,13 @@ python -m pytest
 * `open_count` カラムは仕様どおり作成していますが、**初期バージョンでは加算していません**。
   リンクは新しいタブを開くだけでアプリ側へ通知されず、クリックを正確に検知できないためです。
   加算用のAPI（`ListRepository.increment_open_count`）は残してあり、画面には表示していません。
-* 新規作成URLの自動生成は**候補**です。Power Appsカスタムフォームや独自ビューでは正しくない場合があるため、
-  必ず生成結果を確認・編集してください（生成時はクエリ文字列とフラグメントを除去します）。
-* 削除は物理削除です。ゴミ箱機能はありません。
+* SharePoint Listへのアイテム新規作成（NewForm.aspx）は扱いません。**リンクの管理に用途を絞っています**。
+  過去のバックアップJSONを復元できるよう、`new_item_url` カラムと取り込み処理だけは残しています。
+* 削除は物理削除です。ゴミ箱機能はありません。まとめて削除も取り消せないため、
+  先に「バックアップ」でJSONを書き出すことを推奨します（10件以上は確認チェックが必須です）。
+* タイル表示は既定で50件までです。Streamlitは1操作ごとに画面全体を再描画するため、
+  表示件数が増えると操作の反応が鈍くなります。「さらに表示」で増やせます。
+* グループ表示ではグループを途中で分割しないため、大きなグループがあると50件を超えて表示されます。
 * 並び順の「リスト名」はUnicodeコードポイント順です（日本語の読み仮名順にはなりません）。
 * サイドバーの「環境」フィルターには、実際に登録データで使われている環境のみが表示されます。
 * URLのみを貼り付けた場合、リスト名はURLから推測しません。プレビューで入力してください。
@@ -152,6 +183,12 @@ python -m pytest
 * グループ未設定のリストは「未分類」として扱い、サイドバーのグループフィルターからも選択できます。
 * 行末の改行コード差分を避けるため `.gitattributes` を追加しました（`.bat` はCRLF、`.py`/`.md` はLF）。
 * エディタ設定として `.gitignore` にPyCharm（JetBrains）向けの除外（`.idea/`、`*.iml` など）を追加しました。
+* タイル内のリンクは `st.link_button` ではなく `<a target="_blank" rel="noopener noreferrer">` で描画しています
+  （SPEC 15.5 の優先順位2）。ウィジェット数を減らし、件数が増えても操作を軽く保つためです。
+* 取り込みプレビューは行ごとの入力欄ではなく `st.data_editor` 1つにまとめています。
+  105件のプレビューで、ウィジェット641個・高さ51,769pxから6個・453pxになりました。
+* まとめて削除の範囲は、サイドバーのフィルター結果をそのまま使う方式にしました。
+  グループ専用の削除機能を別に作らず、タグや環境での一括削除にも同じ仕組みが使えます。
 
 ## ライセンス
 

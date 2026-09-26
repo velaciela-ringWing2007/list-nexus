@@ -12,7 +12,6 @@ SharePoint / Microsoft Lists のページから、リスト情報をJSONとし�
 | [サイト内の全リスト一括取得](#サイト内の全リスト一括取得) | サイトのリスト／ライブラリを**全件** | SharePointサイトの任意のページ |
 | [ページ内リンク一括取得](#ページ内リンク一括取得) | ページ内の同一ドメインリンクを全件 | どのWebページでも可 |
 | [一覧ページ取得](#一覧ページ取得specの81) | 開いているページ1件 | リストの一覧ページ |
-| [新規作成ページ取得](#新規作成ページ取得specの82) | 開いているページの新規作成URL1件 | 新規作成フォーム |
 
 大量に登録したいときは **「サイト内の全リスト一括取得」** を使ってください。1サイト分が1回で入ります。
 
@@ -35,7 +34,7 @@ SharePoint / Microsoft Lists のページから、リスト情報をJSONとし�
 そのサイトのリスト／ライブラリを SharePoint の REST API (`/_api/web/lists`) からまとめて取得します。
 **ブラウザの既存ログインセッションで呼ぶだけ**で、Microsoft Graph API や Entra ID の追加認証は使いません（SPEC §4.2の対象外事項には触れません）。
 
-取得内容: リスト名 / 一覧URL / 新規作成URL（候補）/ 設定URL / サイト名 / 説明
+取得内容: リスト名 / 一覧URL / 設定URL（リスト設定ページ）/ サイト名 / 説明
 非表示リストとシステムリストは除外し、リスト名の昇順で並べます。最大500件です。
 
 出力形式（そのまま「貼り付け取込」へ）:
@@ -45,7 +44,6 @@ SharePoint / Microsoft Lists のページから、リスト情報をJSONとし�
   {
     "name": "障害管理",
     "listUrl": "https://example.sharepoint.com/sites/dev/Lists/Issues/AllItems.aspx",
-    "newItemUrl": "https://example.sharepoint.com/sites/dev/Lists/Issues/NewForm.aspx",
     "settingsUrl": "https://example.sharepoint.com/sites/dev/_layouts/15/listedit.aspx?List=%7B...%7D",
     "siteName": "開発部サイト",
     "description": ""
@@ -56,13 +54,12 @@ SharePoint / Microsoft Lists のページから、リスト情報をJSONとし�
 ソース: [bookmarklets/collect-site-lists.js](bookmarklets/collect-site-lists.js)
 
 ```javascript
-javascript:(async()=>{const c=window._spPageContextInfo||{};const f=()=>{const m=location.pathname.match(/^\/(sites|teams)\/[^/]+/i);return location.origin+(m?m[0]:'');};const s=String(c.webAbsoluteUrl||f()).replace(/\/+$/,'');const h={Accept:'application/json;odata=nometadata'};const cp=async(t,m)=>{try{await navigator.clipboard.writeText(t);alert(m);}catch(e){const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;z-index:2147483647;top:5%;left:5%;width:90%;height:70%;font-size:12px;';document.body.appendChild(a);a.focus();a.select();alert('クリップボードへ書き込めませんでした。表示されたテキストをCtrl+Cでコピーしてください。');}};try{const wr=await fetch(s+'/_api/web?$select=Title',{headers:h,credentials:'same-origin'});if(!wr.ok)throw new Error('web '+wr.status);const w=await wr.json();const q='/_api/web/lists?$select=Title,Id,Description,BaseTemplate,DefaultViewUrl,Hidden,IsSystemList&$filter=Hidden eq false&$top=500';const lr=await fetch(s+q,{headers:h,credentials:'same-origin'});if(!lr.ok)throw new Error('lists '+lr.status);const p=await lr.json();const es=(p.value||[]).filter(i=>!i.IsSystemList&&i.DefaultViewUrl).map(i=>{const u=location.origin+i.DefaultViewUrl;return{name:i.Title,listUrl:u,newItemUrl:i.BaseTemplate===101?'':u.replace(/\/[^/]+$/,'/NewForm.aspx'),settingsUrl:s+'/_layouts/15/listedit.aspx?List=%7B'+String(i.Id).replace(/[{}]/g,'')+'%7D',siteName:w.Title||'',description:i.Description||''};}).sort((a,b)=>a.name.localeCompare(b.name,'ja'));if(!es.length){alert('取得できるリストがありませんでした。');return;}await cp(JSON.stringify(es,null,2),es.length+'件のリストをコピーしました。\n\nLIST NEXUS の「貼り付け取込」に貼り付けてください。');}catch(e){alert('リスト情報を取得できませんでした。\nSharePointサイトのページで実行してください。\n\n'+e.message);}})();
+javascript:(async()=>{const c=window._spPageContextInfo||{};const f=()=>{const m=location.pathname.match(/^\/(sites|teams)\/[^/]+/i);return location.origin+(m?m[0]:'');};const s=String(c.webAbsoluteUrl||f()).replace(/\/+$/,'');const h={Accept:'application/json;odata=nometadata'};const cp=async(t,m)=>{try{await navigator.clipboard.writeText(t);alert(m);}catch(e){const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;z-index:2147483647;top:5%;left:5%;width:90%;height:70%;font-size:12px;';document.body.appendChild(a);a.focus();a.select();alert('クリップボードへ書き込めませんでした。表示されたテキストをCtrl+Cでコピーしてください。');}};try{const wr=await fetch(s+'/_api/web?$select=Title',{headers:h,credentials:'same-origin'});if(!wr.ok)throw new Error('web '+wr.status);const w=await wr.json();const q='/_api/web/lists?$select=Title,Id,Description,DefaultViewUrl,Hidden,IsSystemList&$filter=Hidden eq false&$top=500';const lr=await fetch(s+q,{headers:h,credentials:'same-origin'});if(!lr.ok)throw new Error('lists '+lr.status);const p=await lr.json();const es=(p.value||[]).filter(i=>!i.IsSystemList&&i.DefaultViewUrl).map(i=>({name:i.Title,listUrl:location.origin+i.DefaultViewUrl,settingsUrl:s+'/_layouts/15/listedit.aspx?List=%7B'+String(i.Id).replace(/[{}]/g,'')+'%7D',siteName:w.Title||'',description:i.Description||''})).sort((a,b)=>a.name.localeCompare(b.name,'ja'));if(!es.length){alert('取得できるリストがありませんでした。');return;}await cp(JSON.stringify(es,null,2),es.length+'件のリストをコピーしました。\n\nLIST NEXUS の「貼り付け取込」に貼り付けてください。');}catch(e){alert('リスト情報を取得できませんでした。\nSharePointサイトのページで実行してください。\n\n'+e.message);}})();
 ```
 
 注意点:
 
-* **新規作成URLは候補です。** 既定ビューのURLから機械的に組み立てているため、Power Appsカスタムフォームや独自フォームのリストでは実際のURLと異なります。取込プレビューで確認してください。
-* ドキュメントライブラリには新規作成フォームがないため、新規作成URLは空になります。
+* 本アプリはリンクの管理に用途を絞っているため、アイテムの新規作成URL（NewForm.aspx）は取得しません。
 * 「リスト情報を取得できませんでした」と出る場合は、SharePointサイトのページで実行しているか確認してください。テナントの設定でREST APIが制限されている場合は、下の「ページ内リンク一括取得」やExcelからのタブ区切り貼り付けを使ってください。
 
 ## ページ内リンク一括取得
@@ -98,30 +95,6 @@ javascript:(async()=>{const L=300;const seen={};const es=[];const as=document.qu
 ```javascript
 javascript:(async()=>{const data={name:document.title.replace(/\s*-\s*Microsoft Lists.*$/i,'').replace(/\s*-\s*SharePoint.*$/i,'').trim(),listUrl:location.href,sourceTitle:document.title,capturedAt:new Date().toISOString()};const text=JSON.stringify(data,null,2);try{await navigator.clipboard.writeText(text);alert('リスト情報をコピーしました\n\n'+data.name);}catch(e){prompt('コピーしてください',text);}})();
 ```
-
-## 新規作成ページ取得（SPECの8.2）
-
-新規作成フォーム（NewForm.aspx やカスタムフォーム）を開いた状態で実行します。
-
-```json
-{
-  "action": "newItem",
-  "name": "障害管理",
-  "newItemUrl": "https://example.sharepoint.com/sites/dev/Lists/Issues/NewForm.aspx",
-  "capturedAt": "2026-07-27T12:00:00.000Z"
-}
-```
-
-ソース: [bookmarklets/capture-new-item.js](bookmarklets/capture-new-item.js)
-
-```javascript
-javascript:(async()=>{const data={action:"newItem",name:document.title.replace(/\s*-\s*Microsoft Lists.*$/i,'').replace(/\s*-\s*SharePoint.*$/i,'').trim(),newItemUrl:location.href,capturedAt:new Date().toISOString()};const text=JSON.stringify(data,null,2);try{await navigator.clipboard.writeText(text);alert('新規作成URLをコピーしました');}catch(e){prompt('コピーしてください',text);}})();
-```
-
-このJSONには一覧URLが含まれないため、貼り付け取込のプレビューで
-「新規作成URLのみのデータです。対応する一覧URLを入力してください。」と表示されます。
-一覧URLを入力してから保存してください。
-既に登録済みのリストへ新規作成URLだけを追加したい場合は、タイルの「編集」から貼るほうが簡単です。
 
 ---
 

@@ -8,9 +8,7 @@
  * - ブラウザの既存ログインセッション（Cookie）で呼ぶだけで、
  *   Microsoft Graph APIやEntra IDの追加認証は使わない。
  * - 取得するのはリスト名・URL・説明のみ。アイテムの中身は取得しない。
- * - 新規作成URLはDefaultViewUrlから組み立てた「候補」。
- *   Power Appsカスタムフォーム等では実際のURLと異なるため、
- *   取込プレビューで必ず確認すること。
+ * - 設定URLはリスト設定ページ(listedit.aspx)を指す。
  *
  * このファイルが原本。scripts/bookmarklets.md の1行版はここから書き起こしている。
  */
@@ -48,7 +46,7 @@
     const web = await webResponse.json();
 
     const query =
-      '/_api/web/lists?$select=Title,Id,Description,BaseTemplate,DefaultViewUrl,Hidden,IsSystemList' +
+      '/_api/web/lists?$select=Title,Id,Description,DefaultViewUrl,Hidden,IsSystemList' +
       '&$filter=Hidden eq false&$top=500';
     const listResponse = await fetch(site + query, {
       headers: headers,
@@ -60,14 +58,10 @@
     const lists = (payload.value || []).filter((item) => !item.IsSystemList && item.DefaultViewUrl);
     const entries = lists
       .map((item) => {
-        const listUrl = location.origin + item.DefaultViewUrl;
-        // ドキュメントライブラリ(101)には新規作成フォームがないため候補を作らない。
-        const newItemUrl = item.BaseTemplate === 101 ? '' : listUrl.replace(/\/[^/]+$/, '/NewForm.aspx');
         const guid = String(item.Id).replace(/[{}]/g, '');
         return {
           name: item.Title,
-          listUrl: listUrl,
-          newItemUrl: newItemUrl,
+          listUrl: location.origin + item.DefaultViewUrl,
           settingsUrl: site + '/_layouts/15/listedit.aspx?List=%7B' + guid + '%7D',
           siteName: web.Title || '',
           description: item.Description || ''
