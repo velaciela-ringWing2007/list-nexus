@@ -143,6 +143,47 @@ class TestCrud:
         assert repo.delete(999) is False
 
 
+class TestDeleteMany:
+    def test_deletes_selected_ids_only(self, repo: ListRepository) -> None:
+        first = repo.create(make_list())
+        second = repo.create(make_list(name="端末管理", list_url=DEVICES_URL))
+        third = repo.create(make_list(name="総務メモ", list_url=MEMO_URL))
+
+        deleted = repo.delete_many([first.id or 0, third.id or 0])
+        assert deleted == 2
+        remaining = [item.name for item in repo.list_all()]
+        assert remaining == ["端末管理"]
+        assert repo.get_by_id(second.id or 0) is not None
+
+    def test_empty_list_deletes_nothing(self, repo: ListRepository) -> None:
+        repo.create(make_list())
+        assert repo.delete_many([]) == 0
+        assert repo.count() == 1
+
+    def test_unknown_ids_are_ignored(self, repo: ListRepository) -> None:
+        created = repo.create(make_list())
+        assert repo.delete_many([created.id or 0, 999]) == 1
+        assert repo.count() == 0
+
+    def test_deletes_all_rows(self, repo: ListRepository) -> None:
+        ids = [
+            (repo.create(make_list(name=f"リスト{i}", list_url=f"{MEMO_URL}?v={i}")).id or 0)
+            for i in range(5)
+        ]
+        assert repo.delete_many(ids) == 5
+        assert repo.count() == 0
+
+    def test_group_wide_delete_via_filter(self, repo: ListRepository) -> None:
+        """グループで絞ってからまとめて削除する使い方を再現する。"""
+        repo.create(make_list(group_name="開発"))
+        repo.create(make_list(name="端末管理", list_url=DEVICES_URL, group_name="運用"))
+        repo.create(make_list(name="総務メモ", list_url=MEMO_URL, group_name="運用"))
+
+        targets = filter_lists(repo.list_all(), groups=["運用"])
+        assert repo.delete_many([item.id or 0 for item in targets]) == 2
+        assert [item.group_name for item in repo.list_all()] == ["開発"]
+
+
 class TestDuplicateUrl:
     def test_create_duplicate_url_raises(self, repo: ListRepository) -> None:
         repo.create(make_list())

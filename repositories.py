@@ -175,6 +175,23 @@ class ListRepository:
         except sqlite3.Error as exc:
             raise DatabaseError("リストの削除に失敗しました。") from exc
 
+    def delete_many(self, list_ids: Sequence[int]) -> int:
+        """複数件をまとめて物理削除し、削除件数を返す。
+
+        1トランザクションで実行するため、途中で失敗した場合は1件も削除しない。
+        """
+        ids = [int(value) for value in list_ids]
+        if not ids:
+            return 0
+        try:
+            with connect(self.db_path) as connection, transaction(connection):
+                cursor = connection.executemany(
+                    "DELETE FROM lists WHERE id = ?", [(list_id,) for list_id in ids]
+                )
+                return int(cursor.rowcount)
+        except sqlite3.Error as exc:
+            raise DatabaseError("リストの一括削除に失敗しました。") from exc
+
     def set_favorite(self, list_id: int, favorite: bool) -> bool:
         """お気に入り状態を更新する。更新した場合 True を返す。"""
         try:
