@@ -61,7 +61,8 @@
         const guid = String(item.Id).replace(/[{}]/g, '');
         return {
           name: item.Title,
-          listUrl: location.origin + item.DefaultViewUrl,
+          // 空白を含むライブラリ名でも壊れないよう、空白だけをエンコードする
+          listUrl: location.origin + item.DefaultViewUrl.replace(/ /g, '%20'),
           settingsUrl: site + '/_layouts/15/listedit.aspx?List=%7B' + guid + '%7D',
           siteName: web.Title || '',
           description: item.Description || ''

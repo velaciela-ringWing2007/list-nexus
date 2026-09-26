@@ -11,7 +11,7 @@ SharePoint / Microsoft Lists のページから、リスト情報をJSONとし�
 | --- | --- | --- |
 | [サイト内の全リスト一括取得](#サイト内の全リスト一括取得) | サイトのリスト／ライブラリを**全件** | SharePointサイトの任意のページ |
 | [ページ内リンク一括取得](#ページ内リンク一括取得) | ページ内の同一ドメインリンクを全件 | どのWebページでも可 |
-| [一覧ページ取得](#一覧ページ取得specの81) | 開いているページ1件 | リストの一覧ページ |
+| [このリストだけ取得](#このリストだけ取得specの81) | 開いているリスト1件 | リストの一覧ページ |
 
 大量に登録したいときは **「サイト内の全リスト一括取得」** を使ってください。1サイト分が1回で入ります。
 
@@ -54,7 +54,7 @@ SharePoint / Microsoft Lists のページから、リスト情報をJSONとし�
 ソース: [bookmarklets/collect-site-lists.js](bookmarklets/collect-site-lists.js)
 
 ```javascript
-javascript:(async()=>{const c=window._spPageContextInfo||{};const f=()=>{const m=location.pathname.match(/^\/(sites|teams)\/[^/]+/i);return location.origin+(m?m[0]:'');};const s=String(c.webAbsoluteUrl||f()).replace(/\/+$/,'');const h={Accept:'application/json;odata=nometadata'};const cp=async(t,m)=>{try{await navigator.clipboard.writeText(t);alert(m);}catch(e){const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;z-index:2147483647;top:5%;left:5%;width:90%;height:70%;font-size:12px;';document.body.appendChild(a);a.focus();a.select();alert('クリップボードへ書き込めませんでした。表示されたテキストをCtrl+Cでコピーしてください。');}};try{const wr=await fetch(s+'/_api/web?$select=Title',{headers:h,credentials:'same-origin'});if(!wr.ok)throw new Error('web '+wr.status);const w=await wr.json();const q='/_api/web/lists?$select=Title,Id,Description,DefaultViewUrl,Hidden,IsSystemList&$filter=Hidden eq false&$top=500';const lr=await fetch(s+q,{headers:h,credentials:'same-origin'});if(!lr.ok)throw new Error('lists '+lr.status);const p=await lr.json();const es=(p.value||[]).filter(i=>!i.IsSystemList&&i.DefaultViewUrl).map(i=>({name:i.Title,listUrl:location.origin+i.DefaultViewUrl,settingsUrl:s+'/_layouts/15/listedit.aspx?List=%7B'+String(i.Id).replace(/[{}]/g,'')+'%7D',siteName:w.Title||'',description:i.Description||''})).sort((a,b)=>a.name.localeCompare(b.name,'ja'));if(!es.length){alert('取得できるリストがありませんでした。');return;}await cp(JSON.stringify(es,null,2),es.length+'件のリストをコピーしました。\n\nLIST NEXUS の「貼り付け取込」に貼り付けてください。');}catch(e){alert('リスト情報を取得できませんでした。\nSharePointサイトのページで実行してください。\n\n'+e.message);}})();
+javascript:(async()=>{const c=window._spPageContextInfo||{};const f=()=>{const m=location.pathname.match(/^\/(sites|teams)\/[^/]+/i);return location.origin+(m?m[0]:'');};const s=String(c.webAbsoluteUrl||f()).replace(/\/+$/,'');const h={Accept:'application/json;odata=nometadata'};const cp=async(t,m)=>{try{await navigator.clipboard.writeText(t);alert(m);}catch(e){const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;z-index:2147483647;top:5%;left:5%;width:90%;height:70%;font-size:12px;';document.body.appendChild(a);a.focus();a.select();alert('クリップボードへ書き込めませんでした。表示されたテキストをCtrl+Cでコピーしてください。');}};try{const wr=await fetch(s+'/_api/web?$select=Title',{headers:h,credentials:'same-origin'});if(!wr.ok)throw new Error('web '+wr.status);const w=await wr.json();const q='/_api/web/lists?$select=Title,Id,Description,DefaultViewUrl,Hidden,IsSystemList&$filter=Hidden eq false&$top=500';const lr=await fetch(s+q,{headers:h,credentials:'same-origin'});if(!lr.ok)throw new Error('lists '+lr.status);const p=await lr.json();const es=(p.value||[]).filter(i=>!i.IsSystemList&&i.DefaultViewUrl).map(i=>({name:i.Title,listUrl:location.origin+i.DefaultViewUrl.replace(/ /g,'%20'),settingsUrl:s+'/_layouts/15/listedit.aspx?List=%7B'+String(i.Id).replace(/[{}]/g,'')+'%7D',siteName:w.Title||'',description:i.Description||''})).sort((a,b)=>a.name.localeCompare(b.name,'ja'));if(!es.length){alert('取得できるリストがありませんでした。');return;}await cp(JSON.stringify(es,null,2),es.length+'件のリストをコピーしました。\n\nLIST NEXUS の「貼り付け取込」に貼り付けてください。');}catch(e){alert('リスト情報を取得できませんでした。\nSharePointサイトのページで実行してください。\n\n'+e.message);}})();
 ```
 
 注意点:
@@ -77,23 +77,37 @@ SharePointのハブページやリンク集からの取り込みに使えます�
 javascript:(async()=>{const L=300;const seen={};const es=[];const as=document.querySelectorAll('a[href]');for(let i=0;i<as.length;i++){const a=as[i];const u=a.href;if(!/^https?:/i.test(u))continue;if(a.hostname!==location.hostname)continue;if(seen[u])continue;const t=(a.innerText||a.textContent||'').replace(/\s+/g,' ').trim();const n=t||(a.getAttribute('title')||'').trim();if(!n)continue;seen[u]=true;es.push({name:n,listUrl:u});if(es.length>=L)break;}if(!es.length){alert('コピーできるリンクが見つかりませんでした。');return;}const tx=JSON.stringify(es,null,2);const ms=es.length+'件のリンクをコピーしました。\n\nLIST NEXUS の「貼り付け取込」に貼り付けてください。';try{await navigator.clipboard.writeText(tx);alert(ms);}catch(e){const a2=document.createElement('textarea');a2.value=tx;a2.style.cssText='position:fixed;z-index:2147483647;top:5%;left:5%;width:90%;height:70%;font-size:12px;';document.body.appendChild(a2);a2.focus();a2.select();alert('クリップボードへ書き込めませんでした。表示されたテキストをCtrl+Cでコピーしてください。');}})();
 ```
 
-## 一覧ページ取得（SPECの8.1）
+## このリストだけ取得（SPECの8.1）
 
-現在のページタイトルとURLを1件分だけコピーします。
+開いているリストを1件だけコピーします。**新しく作ったリストをその場で登録する**ときに使います。
+
+リストIDまたはURLからREST APIで引くため、リスト名は画面タイトルの装飾が付かない正確な名前になり、
+一覧URLもビュー固有のクエリ（`?viewid=...` など）を含まない正規の形になります。
 
 ```json
 {
   "name": "障害管理",
   "listUrl": "https://example.sharepoint.com/sites/dev/Lists/Issues/AllItems.aspx",
-  "sourceTitle": "障害管理 - Microsoft Lists",
-  "capturedAt": "2026-07-27T12:00:00.000Z"
+  "settingsUrl": "https://example.sharepoint.com/sites/dev/_layouts/15/listedit.aspx?List=%7B...%7D",
+  "siteName": "開発部サイト",
+  "description": ""
+}
+```
+
+SharePoint以外のページや、APIが使えない場合は、ページタイトルと現在のURLにフォールバックします。
+
+```json
+{
+  "name": "ページタイトル",
+  "listUrl": "https://example.com/current/page",
+  "sourceTitle": "ページタイトル - サイト名"
 }
 ```
 
 ソース: [bookmarklets/capture-list.js](bookmarklets/capture-list.js)
 
 ```javascript
-javascript:(async()=>{const data={name:document.title.replace(/\s*-\s*Microsoft Lists.*$/i,'').replace(/\s*-\s*SharePoint.*$/i,'').trim(),listUrl:location.href,sourceTitle:document.title,capturedAt:new Date().toISOString()};const text=JSON.stringify(data,null,2);try{await navigator.clipboard.writeText(text);alert('リスト情報をコピーしました\n\n'+data.name);}catch(e){prompt('コピーしてください',text);}})();
+javascript:(async()=>{const c=window._spPageContextInfo||{};const f=()=>{const m=location.pathname.match(/^\/(sites|teams)\/[^/]+/i);return location.origin+(m?m[0]:'');};const s=String(c.webAbsoluteUrl||f()).replace(/\/+$/,'');const h={Accept:'application/json;odata=nometadata'};const cp=async(d,m)=>{const t=JSON.stringify(d,null,2);try{await navigator.clipboard.writeText(t);alert(m);}catch(e){prompt('コピーしてください',t);}};const tn=()=>document.title.replace(/\s*-\s*Microsoft Lists.*$/i,'').replace(/\s*-\s*SharePoint.*$/i,'').replace(/\s*-\s*すべてのアイテム.*$/,'').trim();const lf=()=>decodeURIComponent(location.pathname).replace(/\/[^/]*\.aspx$/i,'').replace(/\/Forms$/i,'');const id=String(c.pageListId||c.listId||'').replace(/[{}]/g,'');try{const wr=await fetch(s+'/_api/web?$select=Title',{headers:h,credentials:'same-origin'});if(!wr.ok)throw new Error('web '+wr.status);const w=await wr.json();const sel='?$select=Title,Id,Description,DefaultViewUrl';const ep=id?s+"/_api/web/lists(guid'"+id+"')"+sel:s+"/_api/web/getList('"+encodeURI(lf().replace(/'/g,"''"))+"')"+sel;const lr=await fetch(ep,{headers:h,credentials:'same-origin'});if(!lr.ok)throw new Error('list '+lr.status);const i=await lr.json();if(!i||!i.Title)throw new Error('list not found');await cp({name:i.Title,listUrl:i.DefaultViewUrl?location.origin+i.DefaultViewUrl.replace(/ /g,'%20'):location.href,settingsUrl:s+'/_layouts/15/listedit.aspx?List=%7B'+String(i.Id).replace(/[{}]/g,'')+'%7D',siteName:w.Title||'',description:i.Description||''},'このリストをコピーしました\n\n'+i.Title);}catch(e){await cp({name:tn(),listUrl:location.href,sourceTitle:document.title},'ページのタイトルとURLをコピーしました（API未使用）\n\n'+tn());}})();
 ```
 
 ---
