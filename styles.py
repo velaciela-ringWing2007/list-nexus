@@ -244,6 +244,38 @@ _CSS = f"""
     box-shadow: 0 0 8px rgba(34, 211, 238, 0.3);
 }}
 
+/* ---------- タイル内リンク ----------
+   st.link_button はウィジェット扱いになり、件数が増えると再描画が重くなる。
+   タイルのリンクは素のアンカーで描画する（SPEC 15.5 の優先順位2）。 */
+.ln-links {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.2rem 0 0.45rem 0;
+}}
+.ln-links a {{
+    flex: 1 1 auto;
+    text-align: center;
+    padding: 0.25rem 0.7rem;
+    border: 1px solid var(--ln-border);
+    border-radius: 6px;
+    background: rgba(34, 211, 238, 0.07);
+    color: var(--ln-text) !important;
+    font-size: 0.82rem;
+    text-decoration: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}}
+.ln-links a:hover {{
+    border-color: var(--ln-accent);
+    background: rgba(34, 211, 238, 0.16);
+    color: #ffffff !important;
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.28);
+}}
+.ln-links a.ln-links__primary {{
+    border-color: rgba(34, 211, 238, 0.55);
+    font-weight: 700;
+}}
+
 /* ---------- 通知 ---------- */
 .ln-note {{
     border-left: 3px solid var(--ln-accent);
@@ -345,6 +377,23 @@ def render_url_hint(url: str) -> None:
     if not url:
         return
     st.markdown(f'<div class="ln-url">{escape_html(url)}</div>', unsafe_allow_html=True)
+
+
+def render_link_row(links: Iterable[tuple[str, str]], *, primary_first: bool = True) -> None:
+    """(ラベル, URL) の並びを新しいタブで開くリンクとして描画する。
+
+    ラベルとURLは必ずエスケープする。URLは呼び出し前に http/https 検証済みであること。
+    """
+    items: list[str] = []
+    for index, (label, url) in enumerate([link for link in links if link[1]]):
+        css_class = "ln-links__primary" if primary_first and index == 0 else ""
+        items.append(
+            f'<a class="{css_class}" href="{escape_html(url)}" '
+            f'target="_blank" rel="noopener noreferrer">{escape_html(label)}</a>'
+        )
+    if not items:
+        return
+    st.markdown(f'<div class="ln-links">{"".join(items)}</div>', unsafe_allow_html=True)
 
 
 def render_note(message: str, level: str = "info") -> None:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import streamlit as st
 
@@ -42,22 +42,25 @@ from styles import (
     environment_chip,
     render_brand,
     render_description,
+    render_link_row,
     render_meta_row,
     render_note,
     render_section_heading,
     render_title,
 )
-from url_utils import suggest_new_item_url
 
 logger = logging.getLogger("list_nexus")
 
 TILE_COLUMNS = 3
 
+# 1画面に描画するタイルの既定数。Streamlitは1クリックごとに全ウィジェットを
+# 再描画するため、件数が多いと操作が重くなる。既定を抑えて「さらに表示」で伸ばす。
+PAGE_SIZE = 50
+
 # 登録・編集ダイアログのウィジェットキー
 FORM_KEYS: dict[str, Any] = {
     "form_name": "",
     "form_list_url": "",
-    "form_new_item_url": "",
     "form_settings_url": "",
     "form_site_name": "",
     "form_group_name": "",
@@ -66,7 +69,6 @@ FORM_KEYS: dict[str, Any] = {
     "form_description": "",
     "form_favorite": False,
     "form_sort_order": 0,
-    "form_url_hint": "",
 }
 
 DEFAULT_STATE: dict[str, Any] = {
@@ -76,8 +78,12 @@ DEFAULT_STATE: dict[str, Any] = {
     "selected_tags": [],
     "selected_environments": [],
     "group_view": False,
+    "table_view": False,
+    "visible_count": PAGE_SIZE,
     "dialog": None,
     "target_id": None,
+    "bulk_target_ids": [],
+    "bulk_target_label": "",
     "import_entries": [],
     "import_policy": DUPLICATE_SKIP,
     "import_source_label": "",
@@ -135,7 +141,6 @@ def prime_form(item: SharePointList | None = None, **overrides: Any) -> None:
             {
                 "form_name": item.name,
                 "form_list_url": item.list_url,
-                "form_new_item_url": item.new_item_url,
                 "form_settings_url": item.settings_url,
                 "form_site_name": item.site_name,
                 "form_group_name": item.group_name,
@@ -168,13 +173,22 @@ def open_delete_dialog(list_id: int) -> None:
     st.session_state["target_id"] = list_id
 
 
+def open_bulk_delete_dialog(ids: Sequence[int], label: str) -> None:
+    """まとめて削除の確認ダイアログを開く。"""
+    st.session_state["dialog"] = "bulk_delete"
+    st.session_state["bulk_target_ids"] = [int(value) for value in ids]
+    st.session_state["bulk_target_label"] = label
+    st.session_state["bulk_confirmed"] = False
+
+
 def clear_import_widget_state() -> None:
-    """プレビュー用ウィジェットの残存値を消す。
+    """プレビュー表の残存値を消す。
 
     ウィジェット生成前（ボタンのコールバックや押下直後の分岐）から呼ぶこと。
     """
     for key in [key for key in st.session_state if str(key).startswith("imp_")]:
         del st.session_state[key]
+    st.session_state["import_rows"] = []
 
 
 def open_import_dialog(mode: str) -> None:
@@ -189,20 +203,10 @@ def open_import_dialog(mode: str) -> None:
 def close_dialog() -> None:
     st.session_state["dialog"] = None
     st.session_state["target_id"] = None
+    st.session_state["bulk_target_ids"] = []
+    st.session_state["bulk_target_label"] = ""
     st.session_state["import_entries"] = []
     clear_import_widget_state()
-
-
-def apply_new_item_suggestion() -> None:
-    """一覧URLから新規作成URLの候補を生成してフォームへ入れる（候補にすぎない）。"""
-    suggestion = suggest_new_item_url(st.session_state.get("form_list_url", ""))
-    if suggestion:
-        st.session_state["form_new_item_url"] = suggestion
-        st.session_state["form_url_hint"] = "候補を入力しました。内容を確認してください。"
-    else:
-        st.session_state["form_url_hint"] = (
-            "この一覧URLからは候補を生成できませんでした。手入力してください。"
-        )
 
 
 # ----------------------------------------------------------------------
@@ -216,20 +220,6 @@ def render_list_form() -> dict[str, Any]:
         key="form_list_url",
         placeholder="https://example.sharepoint.com/sites/dev/Lists/Issues/AllItems.aspx",
     )
-
-    url_col, hint_col = st.columns([1, 2])
-    with url_col:
-        st.button(
-            "新規作成URLの候補を生成",
-            on_click=apply_new_item_suggestion,
-            use_container_width=True,
-        )
-    hint = st.session_state.get("form_url_hint", "")
-    if hint:
-        with hint_col:
-            render_note(hint)
-
-    st.text_input("新規作成URL", key="form_new_item_url")
     st.text_input("設定画面URL", key="form_settings_url")
 
     left, right = st.columns(2)
@@ -252,7 +242,6 @@ def render_list_form() -> dict[str, Any]:
     return {
         "name": st.session_state["form_name"],
         "list_url": st.session_state["form_list_url"],
-        "new_item_url": st.session_state["form_new_item_url"],
         "settings_url": st.session_state["form_settings_url"],
         "site_name": st.session_state["form_site_name"],
         "group_name": st.session_state["form_group_name"],
@@ -313,7 +302,8 @@ def edit_dialog(repository: ListRepository) -> None:
 
     if save_col.button("更新", type="primary", use_container_width=True, key="edit_submit"):
         try:
-            item = build_list(id=target.id, **values)
+            # new_item_url は画面で扱わないが、既存の値は消さずに引き継ぐ。
+            item = build_list(id=target.id, new_item_url=target.new_item_url, **values)
             updated = repository.update(item)
         except ValidationError as exc:
             st.error(str(exc), icon="⛔")
@@ -373,6 +363,64 @@ def delete_dialog(repository: ListRepository) -> None:
         st.rerun()
 
 
+# まとめて削除で、追加確認（チェックボックス）を要求する件数のしきい値。
+BULK_CONFIRM_THRESHOLD = 10
+
+
+@st.dialog("まとめて削除の確認", width="large")
+def bulk_delete_dialog(repository: ListRepository) -> None:
+    ids: list[int] = st.session_state.get("bulk_target_ids", [])
+    label: str = st.session_state.get("bulk_target_label", "")
+
+    targets = [item for item in (repository.get_by_id(list_id) for list_id in ids) if item]
+    if not targets:
+        st.error("削除対象のリストが見つかりませんでした。", icon="⛔")
+        if st.button("閉じる", key="bulk_missing_close"):
+            close_dialog()
+            st.rerun()
+        return
+
+    st.warning(f"{label}{len(targets)}件を削除しますか？", icon="⚠️")
+    st.caption("この操作は取り消せません（ゴミ箱機能はありません）。")
+
+    names = [item.name for item in targets]
+    for name in names[:5]:
+        st.markdown(f"- {name}")
+    if len(names) > 5:
+        with st.expander(f"残り{len(names) - 5}件を表示"):
+            st.markdown("\n".join(f"- {name}" for name in names[5:]))
+
+    ready = True
+    if len(targets) >= BULK_CONFIRM_THRESHOLD:
+        ready = st.checkbox(
+            "件数と内容を確認しました（必要なら先に「バックアップ」で書き出してください）",
+            key="bulk_confirmed",
+        )
+
+    delete_col, cancel_col = st.columns([1, 1])
+    if delete_col.button(
+        f"{len(targets)}件を削除する",
+        type="primary",
+        use_container_width=True,
+        disabled=not ready,
+        key="bulk_delete_submit",
+    ):
+        try:
+            deleted = repository.delete_many([int(item.id or 0) for item in targets])
+        except DatabaseError as exc:
+            logger.exception("リストの一括削除に失敗しました")
+            st.error(str(exc), icon="⛔")
+        else:
+            flash(f"{deleted}件を削除しました。")
+            st.session_state["visible_count"] = PAGE_SIZE
+            close_dialog()
+            st.rerun()
+
+    if cancel_col.button("キャンセル", use_container_width=True, key="bulk_delete_cancel"):
+        close_dialog()
+        st.rerun()
+
+
 # ----------------------------------------------------------------------
 # インポート
 # ----------------------------------------------------------------------
@@ -402,53 +450,79 @@ def store_parse_result(entries: Iterable[ParsedEntry], source_label: str) -> Non
     st.session_state["import_source_label"] = source_label
 
 
+def build_preview_rows(
+    repository: ListRepository, entries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """プレビュー表の行データを作る（状態列は読み取り専用）。"""
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        stored = repository.get_by_url(entry["list_url"]) if entry["list_url"] else None
+        if entry["errors"]:
+            status = "⛔ " + " / ".join(entry["errors"])
+        elif stored is not None:
+            status = f"⟳ 登録済み: {stored.name}"
+        else:
+            status = "✓ 新規"
+        rows.append(
+            {
+                "取込": not entry["errors"],
+                "リスト名": entry["name"],
+                "一覧URL": entry["list_url"],
+                "サイト名": entry["site_name"],
+                "グループ": entry["group_name"],
+                "タグ": entry["tags"],
+                "状態": status,
+            }
+        )
+    return rows
+
+
 def render_import_preview(repository: ListRepository) -> None:
-    """解析結果のプレビューを描画し、確定した行だけを保存する。"""
+    """解析結果のプレビューを表形式で描画し、確定した行だけを保存する。
+
+    件数が多くても軽く扱えるよう、行ごとにウィジェットを作らず
+    st.data_editor 1つにまとめている。
+    """
     entries: list[dict[str, Any]] = st.session_state.get("import_entries", [])
     if not entries:
         return
 
     st.markdown("---")
     render_section_heading("インポートプレビュー", len(entries))
-    st.caption("内容を確認・修正し、取り込む行にチェックを入れて保存してください。")
+    st.caption(
+        "表を直接編集できます。「取込」にチェックした行だけを保存します。"
+        "セルをダブルクリックで修正、ヘッダーで並べ替えできます。"
+    )
 
-    for index, entry in enumerate(entries):
-        stored = repository.get_by_url(entry["list_url"]) if entry["list_url"] else None
-        title = entry["name"] or "（リスト名なし）"
-        label = f"{index + 1}. {title}"
-        if stored is not None:
-            label += "  ⟳ 重複"
-        if entry["errors"]:
-            label += "  ⛔ 要確認"
+    rows = build_preview_rows(repository, entries)
+    invalid_count = sum(1 for entry in entries if entry["errors"])
+    duplicate_count = sum(1 for row in rows if row["状態"].startswith("⟳"))
+    if invalid_count:
+        render_note(f"{invalid_count}件に問題があります（状態列を確認してください）。", "error")
+    if duplicate_count:
+        render_note(
+            f"{duplicate_count}件は既に登録済みです。下の「重複の場合の動作」が適用されます。", "warn"
+        )
 
-        with st.expander(label, expanded=True):
-            st.checkbox(
-                "取り込む",
-                key=f"imp_use_{index}",
-                value=not entry["errors"],
-            )
-            st.text_input("リスト名", key=f"imp_name_{index}", value=entry["name"])
-            st.text_input("一覧URL", key=f"imp_url_{index}", value=entry["list_url"])
-            st.text_input(
-                "新規作成URL", key=f"imp_new_{index}", value=entry["new_item_url"]
-            )
-            col_left, col_right = st.columns(2)
-            with col_left:
-                st.text_input(
-                    "グループ", key=f"imp_group_{index}", value=entry["group_name"]
-                )
-            with col_right:
-                st.text_input("タグ（カンマ区切り）", key=f"imp_tags_{index}", value=entry["tags"])
-
-            st.caption(f"解析形式: {entry['source']}")
-            if stored is not None:
-                render_note(
-                    f"既に登録済みです（現在の名称: {stored.name}）。"
-                    f"重複時の動作: {DUPLICATE_POLICY_LABELS[st.session_state['import_policy']]}",
-                    "warn",
-                )
-            for error in entry["errors"]:
-                render_note(error, "error")
+    edited = st.data_editor(
+        rows,
+        key="imp_table",
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        height=min(80 + 36 * len(rows), 460),
+        disabled=["状態"],
+        column_config={
+            "取込": st.column_config.CheckboxColumn("取込", width="small"),
+            "リスト名": st.column_config.TextColumn("リスト名", width="medium"),
+            "一覧URL": st.column_config.TextColumn("一覧URL", width="large"),
+            "サイト名": st.column_config.TextColumn("サイト名", width="small"),
+            "グループ": st.column_config.TextColumn("グループ", width="small"),
+            "タグ": st.column_config.TextColumn("タグ（カンマ区切り）", width="small"),
+            "状態": st.column_config.TextColumn("状態", width="medium"),
+        },
+    )
+    st.session_state["import_rows"] = edited
 
     st.radio(
         "重複（一覧URLが同じ）の場合の動作",
@@ -470,31 +544,35 @@ def render_import_preview(repository: ListRepository) -> None:
 
 
 def collect_selected_items(
-    entries: list[dict[str, Any]]
+    entries: list[dict[str, Any]], rows: list[dict[str, Any]]
 ) -> tuple[list[SharePointList], list[str]]:
-    """プレビューで選択された行を検証し、保存対象と入力エラーへ振り分ける。"""
+    """プレビュー表で選択された行を検証し、保存対象と入力エラーへ振り分ける。
+
+    表で編集できる列（リスト名・URL・サイト名・グループ・タグ）は表の値を使い、
+    それ以外（環境・説明・お気に入り・表示順・新規作成URL）は解析結果を引き継ぐ。
+    """
     items: list[SharePointList] = []
     errors: list[str] = []
 
-    for index, entry in enumerate(entries):
-        if not st.session_state.get(f"imp_use_{index}", False):
+    for index, row in enumerate(rows):
+        if not row.get("取込"):
             continue
-
-        label = st.session_state.get(f"imp_name_{index}", "") or f"{index + 1}件目"
+        entry = entries[index] if index < len(entries) else {}
+        label = str(row.get("リスト名") or "").strip() or f"{index + 1}件目"
         try:
             items.append(
                 build_list(
-                    name=st.session_state.get(f"imp_name_{index}", ""),
-                    list_url=st.session_state.get(f"imp_url_{index}", ""),
-                    new_item_url=st.session_state.get(f"imp_new_{index}", ""),
-                    settings_url=entry["settings_url"],
-                    site_name=entry["site_name"],
-                    group_name=st.session_state.get(f"imp_group_{index}", ""),
-                    tags=st.session_state.get(f"imp_tags_{index}", ""),
-                    environment=entry["environment"],
-                    description=entry["description"],
-                    favorite=entry["favorite"],
-                    sort_order=entry["sort_order"],
+                    name=row.get("リスト名"),
+                    list_url=row.get("一覧URL"),
+                    new_item_url=entry.get("new_item_url", ""),
+                    settings_url=entry.get("settings_url", ""),
+                    site_name=row.get("サイト名"),
+                    group_name=row.get("グループ"),
+                    tags=row.get("タグ"),
+                    environment=entry.get("environment", ""),
+                    description=entry.get("description", ""),
+                    favorite=bool(entry.get("favorite", False)),
+                    sort_order=entry.get("sort_order", 0),
                 )
             )
         except ValidationError as exc:
@@ -505,7 +583,8 @@ def collect_selected_items(
 
 def commit_import(repository: ListRepository, entries: list[dict[str, Any]]) -> None:
     """プレビューで確定された行を保存する。"""
-    items, errors = collect_selected_items(entries)
+    rows: list[dict[str, Any]] = st.session_state.get("import_rows", [])
+    items, errors = collect_selected_items(entries, rows)
 
     if not items and not errors:
         flash("取り込む行が選択されていません。", "warning")
@@ -620,31 +699,8 @@ def render_tile(repository: ListRepository, item: SharePointList) -> None:
         )
         render_description(item.description)
 
-        open_col, new_col, settings_col = st.columns(3)
-        with open_col:
-            st.link_button("一覧", item.list_url, use_container_width=True)
-        with new_col:
-            if item.new_item_url:
-                st.link_button("新規作成", item.new_item_url, use_container_width=True)
-            else:
-                st.button(
-                    "新規作成",
-                    key=f"new_disabled_{item.id}",
-                    disabled=True,
-                    help="新規作成URLが未登録です",
-                    use_container_width=True,
-                )
-        with settings_col:
-            if item.settings_url:
-                st.link_button("設定", item.settings_url, use_container_width=True)
-            else:
-                st.button(
-                    "設定",
-                    key=f"settings_disabled_{item.id}",
-                    disabled=True,
-                    help="設定URLが未登録です",
-                    use_container_width=True,
-                )
+        # リンクはウィジェットを使わずアンカーで描画する（件数が増えても軽い）。
+        render_link_row([("開く", item.list_url), ("設定", item.settings_url)])
 
         edit_col, delete_col = st.columns(2)
         edit_col.button(
@@ -674,22 +730,114 @@ def render_tiles(repository: ListRepository, items: list[SharePointList]) -> Non
 
 
 # ----------------------------------------------------------------------
+# 表ビュー（まとめて管理）
+# ----------------------------------------------------------------------
+def build_table_rows(items: list[SharePointList]) -> list[dict[str, Any]]:
+    """表ビュー用の行データを作る。"""
+    return [
+        {
+            "★": item.favorite,
+            "リスト名": item.name,
+            "サイト名": item.site_name,
+            "グループ": item.group_name or UNCATEGORIZED_GROUP,
+            "環境": environment_label(item.environment),
+            "タグ": ", ".join(item.tags),
+            "開く": item.list_url,
+            "設定": item.settings_url,
+            "更新日時": item.updated_at[:16].replace("T", " "),
+        }
+        for item in items
+    ]
+
+
+def render_table_view(repository: ListRepository, items: list[SharePointList]) -> None:
+    """一覧を表で表示し、選択した行をまとめて削除できるようにする。
+
+    行ごとにウィジェットを作らないため、件数が多くても軽い。
+    """
+    render_section_heading("表でまとめて管理", len(items))
+    st.caption(
+        "行をクリックして選択（Shift / Ctrl で複数選択）してから、下のボタンで削除します。"
+        "「開く」「設定」のリンクは新しいタブで開きます。"
+    )
+
+    event = st.dataframe(
+        build_table_rows(items),
+        key="manage_table",
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="multi-row",
+        height=min(120 + 35 * len(items), 620),
+        column_config={
+            "★": st.column_config.CheckboxColumn("★", width="small"),
+            "リスト名": st.column_config.TextColumn("リスト名", width="large"),
+            "サイト名": st.column_config.TextColumn("サイト名", width="small"),
+            "グループ": st.column_config.TextColumn("グループ", width="small"),
+            "環境": st.column_config.TextColumn("環境", width="small"),
+            "タグ": st.column_config.TextColumn("タグ", width="small"),
+            "開く": st.column_config.LinkColumn("開く", display_text="一覧", width="small"),
+            "設定": st.column_config.LinkColumn("設定", display_text="設定", width="small"),
+            "更新日時": st.column_config.TextColumn("更新日時", width="small"),
+        },
+    )
+
+    selected_rows = list(getattr(event.selection, "rows", []) or [])
+    selected = [items[index] for index in selected_rows if index < len(items)]
+
+    selected_col, all_col, _ = st.columns([1.4, 1.6, 3])
+    selected_col.button(
+        f"選択した{len(selected)}件を削除" if selected else "選択した行を削除",
+        type="primary" if selected else "secondary",
+        use_container_width=True,
+        disabled=not selected,
+        key="table_delete_selected",
+        on_click=open_bulk_delete_dialog,
+        args=([item.id for item in selected], "選択した "),
+    )
+    all_col.button(
+        f"表示中の{len(items)}件をすべて削除",
+        use_container_width=True,
+        key="table_delete_all",
+        help="サイドバーのフィルターで絞り込んでから使うと、グループ単位・タグ単位でまとめて削除できます。",
+        on_click=open_bulk_delete_dialog,
+        args=([item.id for item in items], "表示中の "),
+    )
+
+
+# ----------------------------------------------------------------------
 # サイドバー・ヘッダー
 # ----------------------------------------------------------------------
 def render_sidebar(repository: ListRepository, total: int, shown: int) -> None:
     with st.sidebar:
+        st.markdown("### 表示")
+        st.toggle(
+            "表でまとめて管理",
+            key="table_view",
+            help="表形式で一覧し、行を選択してまとめて削除できます。",
+        )
+        if not st.session_state["table_view"]:
+            st.checkbox("グループごとに表示", key="group_view")
+
         st.markdown("### フィルター")
-        st.checkbox("お気に入りのみ", key="favorites_only")
-        st.checkbox("グループごとに表示", key="group_view")
+        st.checkbox("お気に入りのみ", key="favorites_only", on_change=reset_visible_count)
 
         group_options = repository.group_names() + [UNCATEGORIZED_GROUP]
-        st.multiselect("グループ", options=group_options, key="selected_groups")
-        st.multiselect("タグ", options=repository.tag_names(), key="selected_tags")
+        st.multiselect(
+            "グループ", options=group_options, key="selected_groups", on_change=reset_visible_count
+        )
+        st.multiselect(
+            "タグ",
+            options=repository.tag_names(),
+            key="selected_tags",
+            on_change=reset_visible_count,
+        )
         st.multiselect(
             "環境",
             options=repository.environments(),
             format_func=environment_label,
             key="selected_environments",
+            on_change=reset_visible_count,
         )
 
         st.button("フィルターをすべて解除", use_container_width=True, on_click=reset_filters)
@@ -699,12 +847,18 @@ def render_sidebar(repository: ListRepository, total: int, shown: int) -> None:
         st.caption(f"DB: {DATABASE_PATH}")
 
 
+def reset_visible_count() -> None:
+    """絞り込みが変わったら表示件数を既定へ戻す。"""
+    st.session_state["visible_count"] = PAGE_SIZE
+
+
 def reset_filters() -> None:
     st.session_state["search_query"] = ""
     st.session_state["favorites_only"] = False
     st.session_state["selected_groups"] = []
     st.session_state["selected_tags"] = []
     st.session_state["selected_environments"] = []
+    reset_visible_count()
 
 
 def build_export_bytes(items: list[SharePointList]) -> bytes:
@@ -727,6 +881,7 @@ def render_header(items: list[SharePointList]) -> None:
             key="search_query",
             placeholder="リスト名 / サイト名 / グループ / タグ / 説明 / URL",
             label_visibility="collapsed",
+            on_change=reset_visible_count,
         )
     create_col.button(
         "＋ 登録", type="primary", use_container_width=True, on_click=open_create_dialog
@@ -775,21 +930,80 @@ def render_body(repository: ListRepository, items: list[SharePointList]) -> None
         render_note("条件に一致するリストがありません。検索語やフィルターを見直してください。", "warn")
         return
 
-    if st.session_state["group_view"]:
-        for group_name, group_items in group_by_group_name(filtered):
-            render_section_heading(group_name, len(group_items))
-            render_tiles(repository, group_items)
+    if st.session_state["table_view"]:
+        render_table_view(repository, filtered)
         return
 
-    favorites = [item for item in filtered if item.favorite]
-    others = [item for item in filtered if not item.favorite]
+    limit = st.session_state["visible_count"]
 
-    if favorites:
-        render_section_heading("★ お気に入り", len(favorites))
-        render_tiles(repository, favorites)
-    if others:
-        render_section_heading("すべてのリスト" if favorites else "リスト", len(others))
-        render_tiles(repository, others)
+    if st.session_state["group_view"]:
+        # グループは途中で切らない。上限に達するまでのグループを丸ごと表示する。
+        shown_groups: list[tuple[str, list[SharePointList]]] = []
+        shown_count = 0
+        for group in group_by_group_name(filtered):
+            if shown_count >= limit and shown_groups:
+                break
+            shown_groups.append(group)
+            shown_count += len(group[1])
+
+        for group_name, group_items in shown_groups:
+            heading_col, delete_col = st.columns([5, 1])
+            with heading_col:
+                render_section_heading(group_name, len(group_items))
+            group_all = [item for item in filtered if (item.group_name or UNCATEGORIZED_GROUP) == group_name]
+            delete_col.button(
+                "グループを削除",
+                key=f"group_delete_{group_name}",
+                help=f"「{group_name}」の{len(group_all)}件をまとめて削除します。",
+                use_container_width=True,
+                on_click=open_bulk_delete_dialog,
+                args=([item.id for item in group_all], f"グループ「{group_name}」の "),
+            )
+            render_tiles(repository, group_items)
+    else:
+        visible = filtered[:limit]
+        shown_count = len(visible)
+        favorites = [item for item in visible if item.favorite]
+        others = [item for item in visible if not item.favorite]
+
+        if favorites:
+            render_section_heading("★ お気に入り", len(favorites))
+            render_tiles(repository, favorites)
+        if others:
+            render_section_heading("すべてのリスト" if favorites else "リスト", len(others))
+            render_tiles(repository, others)
+
+    render_pager(shown_count, len(filtered))
+
+
+def show_more() -> None:
+    st.session_state["visible_count"] = st.session_state["visible_count"] + PAGE_SIZE
+
+
+def show_all(total: int) -> None:
+    st.session_state["visible_count"] = total
+
+
+def render_pager(shown: int, total: int) -> None:
+    """未表示分があれば「さらに表示」を出す。"""
+    if shown >= total:
+        return
+    st.markdown("---")
+    render_note(f"{total}件のうち{shown}件を表示しています（動作を軽く保つため件数を制限しています）。")
+    more_col, all_col, _ = st.columns([1.2, 1.2, 4])
+    more_col.button(
+        f"さらに{min(PAGE_SIZE, total - shown)}件表示",
+        use_container_width=True,
+        key="show_more",
+        on_click=show_more,
+    )
+    all_col.button(
+        f"すべて表示（{total}件）",
+        use_container_width=True,
+        key="show_all",
+        on_click=show_all,
+        args=(total,),
+    )
 
 
 def render_dialogs(repository: ListRepository) -> None:
@@ -800,6 +1014,8 @@ def render_dialogs(repository: ListRepository) -> None:
         edit_dialog(repository)
     elif dialog == "delete":
         delete_dialog(repository)
+    elif dialog == "bulk_delete":
+        bulk_delete_dialog(repository)
     elif dialog == "paste":
         paste_import_dialog(repository)
     elif dialog == "json":
