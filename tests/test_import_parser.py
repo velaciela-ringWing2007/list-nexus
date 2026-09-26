@@ -54,11 +54,13 @@ class TestJsonObject:
         assert entry.name == "障害管理"
         assert entry.is_valid
 
-    def test_new_item_bookmarklet_requires_list_url(self) -> None:
+    def test_data_without_list_url_is_invalid(self) -> None:
+        """一覧URLが無いデータ（旧・新規作成URL取得Bookmarkletの出力など）は不正扱い。"""
         text = json.dumps(
             {"action": "newItem", "name": "障害管理", "newItemUrl": ISSUES_NEW_URL}
         )
         entry = parse_import_text(text).entries[0]
+        # 画面では扱わないが、値自体は保持する（バックアップ互換のため）。
         assert entry.new_item_url == ISSUES_NEW_URL
         assert not entry.is_valid
         assert any("一覧URL" in error for error in entry.errors)

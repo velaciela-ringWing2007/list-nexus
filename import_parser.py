@@ -53,7 +53,11 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 @dataclass(slots=True)
 class ParsedEntry:
-    """解析できた1件分の候補データ."""
+    """解析できた1件分の候補データ.
+
+    new_item_url は画面では扱わないが、過去のバックアップJSONを
+    そのまま取り込めるように値だけ保持する。
+    """
 
     name: str = ""
     list_url: str = ""
@@ -193,16 +197,7 @@ def entry_from_mapping(payload: dict[str, Any]) -> ParsedEntry:
     elif isinstance(raw_tags, Iterable) and not isinstance(raw_tags, (bytes, dict)):
         entry.tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
 
-    validate_entry(entry)
-
-    # 新規作成ページ取得Bookmarkletの出力には一覧URLが含まれない。
-    # 何が足りないのかがプレビューで分かるように補足する。
-    action = _as_text(payload.get("action")) or _as_text(payload.get("Action"))
-    if action.lower() == "newitem" and not entry.list_url and entry.new_item_url:
-        entry.errors.append(
-            "新規作成URLのみのデータです。対応する一覧URLを入力してください。"
-        )
-    return entry
+    return validate_entry(entry)
 
 
 def _parse_json_payload(payload: Any) -> ParseResult:
