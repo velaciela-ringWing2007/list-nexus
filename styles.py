@@ -253,6 +253,17 @@ _CSS = f"""
     gap: 0.35rem;
     margin: 0.2rem 0 0.45rem 0;
 }}
+/* リスト行の中では折り返さず、1行に収める */
+[class*="st-key-ln-row-"] .ln-links {{
+    flex-wrap: nowrap;
+    margin: 0;
+    gap: 0.25rem;
+}}
+[class*="st-key-ln-row-"] .ln-links a {{
+    padding: 0.18rem 0.5rem;
+    font-size: 0.74rem;
+    white-space: nowrap;
+}}
 .ln-links a {{
     flex: 1 1 auto;
     text-align: center;
@@ -274,6 +285,86 @@ _CSS = f"""
 .ln-links a.ln-links__primary {{
     border-color: rgba(34, 211, 238, 0.55);
     font-weight: 700;
+}}
+
+/* ---------- リスト行 ----------
+   横幅の広い画面で1行1件を見やすく並べる。行ごとのウィジェットは最小限にする。 */
+[class*="st-key-ln-row-"] {{
+    border-bottom: 1px solid rgba(34, 211, 238, 0.14);
+    padding: 0.15rem 0.35rem;
+    transition: background 0.12s ease;
+}}
+[class*="st-key-ln-row-"]:hover {{
+    background: rgba(34, 211, 238, 0.06);
+}}
+.ln-row-main {{
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.15rem 0;
+}}
+.ln-row-name {{
+    font-size: 0.98rem;
+    font-weight: 700;
+    line-height: 1.4;
+    color: var(--ln-text);
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}}
+.ln-row-meta {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    align-items: center;
+}}
+.ln-row-desc {{
+    font-size: 0.78rem;
+    color: var(--ln-muted);
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}}
+
+/* 行内のURL表示（st.code）を1行に収め、コピーボタンだけ使えるようにする */
+[class*="st-key-ln-row-"] [data-testid="stCode"] {{
+    margin: 0;
+}}
+[class*="st-key-ln-row-"] pre {{
+    margin: 0;
+    padding: 0.3rem 2rem 0.3rem 0.5rem !important;
+    background: rgba(7, 11, 22, 0.75) !important;
+    border: 1px solid rgba(34, 211, 238, 0.18);
+    border-radius: 6px;
+}}
+[class*="st-key-ln-row-"] code {{
+    font-size: 0.7rem !important;
+    white-space: nowrap;
+    color: var(--ln-muted) !important;
+}}
+
+/* 行内のボタンを正方形のアイコンボタンに寄せる */
+[class*="st-key-ln-row-"] .stButton > button {{
+    padding: 0.25rem 0.4rem;
+    min-height: 2rem;
+}}
+
+/* ---------- グループ見出し ---------- */
+.ln-group-bar {{
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--ln-accent);
+    letter-spacing: 0.06em;
+    padding: 0.1rem 0;
+}}
+
+/* ---------- サイドバーのグループ一覧 ---------- */
+[data-testid="stSidebar"] .stButton > button {{
+    text-align: left;
+    justify-content: flex-start;
+    font-size: 0.85rem;
+    padding: 0.3rem 0.6rem;
 }}
 
 /* ---------- 通知 ---------- */
@@ -394,6 +485,33 @@ def render_link_row(links: Iterable[tuple[str, str]], *, primary_first: bool = T
     if not items:
         return
     st.markdown(f'<div class="ln-links">{"".join(items)}</div>', unsafe_allow_html=True)
+
+
+def render_row_summary(
+    name: str,
+    description: str,
+    chips: Iterable[str],
+) -> None:
+    """リスト行の主要部分（名称・チップ・説明）を1つのHTMLで描画する。
+
+    行ごとにウィジェットを作らないため、件数が増えても軽い。
+    """
+    parts = [f'<div class="ln-row-name">{escape_html(name)}</div>']
+    chip_html = "".join(chip for chip in chips if chip)
+    if chip_html:
+        parts.append(f'<div class="ln-row-meta">{chip_html}</div>')
+    if description.strip():
+        parts.append(f'<div class="ln-row-desc">{escape_html(description)}</div>')
+    st.markdown(f'<div class="ln-row-main">{"".join(parts)}</div>', unsafe_allow_html=True)
+
+
+def render_group_bar(label: str, count: int) -> None:
+    """グループ見出しを描画する。"""
+    st.markdown(
+        f'<div class="ln-group-bar">{escape_html(label)}'
+        f'<span class="ln-section__count">{count}件</span></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_note(message: str, level: str = "info") -> None:

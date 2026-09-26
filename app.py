@@ -42,9 +42,11 @@ from styles import (
     environment_chip,
     render_brand,
     render_description,
+    render_group_bar,
     render_link_row,
     render_meta_row,
     render_note,
+    render_row_summary,
     render_section_heading,
     render_title,
 )
@@ -52,6 +54,12 @@ from styles import (
 logger = logging.getLogger("list_nexus")
 
 TILE_COLUMNS = 3
+
+# 表示スタイル
+VIEW_LIST = "リスト"
+VIEW_TILE = "タイル"
+VIEW_TABLE = "表（編集）"
+VIEW_MODES: tuple[str, ...] = (VIEW_LIST, VIEW_TILE, VIEW_TABLE)
 
 # 1画面に描画するタイルの既定数。Streamlitは1クリックごとに全ウィジェットを
 # 再描画するため、件数が多いと操作が重くなる。既定を抑えて「さらに表示」で伸ばす。
@@ -77,8 +85,9 @@ DEFAULT_STATE: dict[str, Any] = {
     "selected_groups": [],
     "selected_tags": [],
     "selected_environments": [],
-    "group_view": False,
-    "table_view": False,
+    "group_view": True,
+    "view_mode": VIEW_LIST,
+    "collapsed_groups": [],
     "visible_count": PAGE_SIZE,
     "dialog": None,
     "target_id": None,
@@ -731,6 +740,93 @@ def render_tiles(repository: ListRepository, items: list[SharePointList]) -> Non
 
 
 # ----------------------------------------------------------------------
+# リスト行表示
+# ----------------------------------------------------------------------
+def render_list_row(repository: ListRepository, item: SharePointList) -> None:
+    """1件を1行で描画する。
+
+    行あたりのウィジェットは ★ / 編集 / 削除 の3つに抑え、
+    リンクはアンカー、URLのコピーは st.code の標準コピーボタンで賄う。
+    """
+    with st.container(key=f"ln-row-{item.id}"):
+        star_col, main_col, url_col, link_col, edit_col, delete_col = st.columns(
+            [0.35, 5.2, 3.0, 1.7, 0.45, 0.45], vertical_alignment="center"
+        )
+
+        with star_col:
+            if st.button(
+                "★" if item.favorite else "☆",
+                key=f"fav_{item.id}",
+                help="お気に入りを切り替える",
+            ):
+                toggle_favorite(repository, item)
+                st.rerun()
+
+        with main_col:
+            render_row_summary(
+                item.name,
+                item.description,
+                [
+                    chip(item.site_name, "site") if item.site_name else "",
+                    chip(item.group_name or UNCATEGORIZED_GROUP, "group"),
+                    environment_chip(item.environment),
+                    *[chip(tag, "tag") for tag in item.tags],
+                ],
+            )
+
+        with url_col:
+            # st.code の標準コピーボタンでURLをコピーできる（ウィジェットを増やさない）。
+            st.code(item.list_url, language=None, wrap_lines=False)
+
+        with link_col:
+            render_link_row([("開く", item.list_url), ("設定", item.settings_url)])
+
+        edit_col.button(
+            ":material/edit:",
+            key=f"edit_{item.id}",
+            help="編集",
+            on_click=open_edit_dialog,
+            args=(item,),
+        )
+        delete_col.button(
+            ":material/delete:",
+            key=f"delete_{item.id}",
+            help="削除",
+            on_click=open_delete_dialog,
+            args=(item.id,),
+        )
+
+
+def render_list_rows(repository: ListRepository, items: list[SharePointList]) -> None:
+    for item in items:
+        render_list_row(repository, item)
+
+
+def render_items(repository: ListRepository, items: list[SharePointList]) -> None:
+    """表示スタイルに応じてタイルまたはリスト行で描画する。"""
+    if st.session_state["view_mode"] == VIEW_TILE:
+        render_tiles(repository, items)
+    else:
+        render_list_rows(repository, items)
+
+
+# ----------------------------------------------------------------------
+# グループの折りたたみ
+# ----------------------------------------------------------------------
+def toggle_group(group_name: str) -> None:
+    collapsed: list[str] = list(st.session_state.get("collapsed_groups", []))
+    if group_name in collapsed:
+        collapsed.remove(group_name)
+    else:
+        collapsed.append(group_name)
+    st.session_state["collapsed_groups"] = collapsed
+
+
+def set_all_groups_collapsed(group_names: Sequence[str], collapsed: bool) -> None:
+    st.session_state["collapsed_groups"] = list(group_names) if collapsed else []
+
+
+# ----------------------------------------------------------------------
 # 表ビュー（まとめて管理）
 # ----------------------------------------------------------------------
 # 表で編集できる列（この列だけを差分判定と保存の対象にする）
@@ -931,24 +1027,71 @@ def render_table_view(repository: ListRepository, items: list[SharePointList]) -
 # ----------------------------------------------------------------------
 # サイドバー・ヘッダー
 # ----------------------------------------------------------------------
-def render_sidebar(repository: ListRepository, total: int, shown: int) -> None:
+def select_group(group_name: str) -> None:
+    """サイドバーのグループ一覧から絞り込みを切り替える（同じものを押すと解除）。"""
+    current = st.session_state.get("selected_groups", [])
+    if not group_name:
+        st.session_state["selected_groups"] = []
+    elif current == [group_name]:
+        st.session_state["selected_groups"] = []
+    else:
+        st.session_state["selected_groups"] = [group_name]
+    reset_visible_count()
+
+
+def render_group_nav(items: list[SharePointList]) -> None:
+    """サイドバーにグループ一覧（件数つき）を出す。"""
+    counts: dict[str, int] = {}
+    for item in items:
+        key = item.group_name.strip() or UNCATEGORIZED_GROUP
+        counts[key] = counts.get(key, 0) + 1
+
+    names = sorted((name for name in counts if name != UNCATEGORIZED_GROUP), key=str.casefold)
+    if UNCATEGORIZED_GROUP in counts:
+        names.append(UNCATEGORIZED_GROUP)
+
+    selected = st.session_state.get("selected_groups", [])
+    st.button(
+        f"すべて（{len(items)}）",
+        key="group_nav_all",
+        use_container_width=True,
+        type="primary" if not selected else "secondary",
+        on_click=select_group,
+        args=("",),
+    )
+    for name in names:
+        st.button(
+            f"{name}（{counts[name]}）",
+            key=f"group_nav_{name}",
+            use_container_width=True,
+            type="primary" if selected == [name] else "secondary",
+            on_click=select_group,
+            args=(name,),
+        )
+
+
+def render_sidebar(
+    repository: ListRepository,
+    items: list[SharePointList],
+    total: int,
+    shown: int,
+) -> None:
     with st.sidebar:
         st.markdown("### 表示")
-        st.toggle(
-            "表でまとめて管理",
-            key="table_view",
-            help="表形式で一覧し、行を選択してまとめて削除できます。",
+        st.radio(
+            "表示スタイル",
+            options=list(VIEW_MODES),
+            key="view_mode",
+            label_visibility="collapsed",
         )
-        if not st.session_state["table_view"]:
-            st.checkbox("グループごとに表示", key="group_view")
+        if st.session_state["view_mode"] != VIEW_TABLE:
+            st.checkbox("グループごとに区切る", key="group_view")
+
+        st.markdown("### グループ")
+        render_group_nav(items)
 
         st.markdown("### フィルター")
         st.checkbox("お気に入りのみ", key="favorites_only", on_change=reset_visible_count)
-
-        group_options = repository.group_names() + [UNCATEGORIZED_GROUP]
-        st.multiselect(
-            "グループ", options=group_options, key="selected_groups", on_change=reset_visible_count
-        )
         st.multiselect(
             "タグ",
             options=repository.tag_names(),
@@ -996,7 +1139,9 @@ def build_export_bytes(items: list[SharePointList]) -> bytes:
 
 def render_header(items: list[SharePointList]) -> None:
     render_brand()
-    search_col, create_col, paste_col, json_col, export_col = st.columns([5, 1.3, 1.5, 1.5, 1.5])
+    search_col, create_col, paste_col, json_col, export_col = st.columns(
+        [9, 1.8, 0.5, 0.5, 0.5], vertical_alignment="center"
+    )
 
     with search_col:
         st.text_input(
@@ -1007,22 +1152,32 @@ def render_header(items: list[SharePointList]) -> None:
             on_change=reset_visible_count,
         )
     create_col.button(
-        "＋ 登録", type="primary", use_container_width=True, on_click=open_create_dialog
+        "登録",
+        icon=":material/add:",
+        type="primary",
+        use_container_width=True,
+        on_click=open_create_dialog,
     )
     paste_col.button(
-        "貼り付け取込", use_container_width=True, on_click=open_import_dialog, args=("paste",)
+        ":material/content_paste:",
+        help="貼り付け取込（Bookmarkletの出力やExcelのタブ区切り）",
+        on_click=open_import_dialog,
+        args=("paste",),
     )
     json_col.button(
-        "JSON復元", use_container_width=True, on_click=open_import_dialog, args=("json",)
+        ":material/restore:",
+        help="JSONバックアップから復元",
+        on_click=open_import_dialog,
+        args=("json",),
     )
     with export_col:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         st.download_button(
-            "バックアップ",
+            ":material/download:",
+            help="JSONバックアップをダウンロード",
             data=build_export_bytes(items),
             file_name=f"list-nexus-backup-{timestamp}.json",
             mime="application/json",
-            use_container_width=True,
             disabled=not items,
         )
 
@@ -1030,6 +1185,39 @@ def render_header(items: list[SharePointList]) -> None:
 # ----------------------------------------------------------------------
 # メイン
 # ----------------------------------------------------------------------
+def render_group_section(
+    repository: ListRepository,
+    group_name: str,
+    group_items: list[SharePointList],
+    group_all: list[SharePointList],
+) -> None:
+    """グループ見出し（折りたたみ・削除つき）とその中身を描画する。"""
+    collapsed = group_name in st.session_state["collapsed_groups"]
+
+    toggle_col, heading_col, delete_col = st.columns(
+        [0.35, 9, 0.45], vertical_alignment="center"
+    )
+    toggle_col.button(
+        ":material/chevron_right:" if collapsed else ":material/expand_more:",
+        key=f"group_toggle_{group_name}",
+        help="このグループを開く / 閉じる",
+        on_click=toggle_group,
+        args=(group_name,),
+    )
+    with heading_col:
+        render_group_bar(group_name, len(group_all))
+    delete_col.button(
+        ":material/delete_sweep:",
+        key=f"group_delete_{group_name}",
+        help=f"「{group_name}」の{len(group_all)}件をまとめて削除します",
+        on_click=open_bulk_delete_dialog,
+        args=([item.id for item in group_all], f"グループ「{group_name}」の "),
+    )
+
+    if not collapsed:
+        render_items(repository, group_items)
+
+
 def render_body(repository: ListRepository, items: list[SharePointList]) -> None:
     filtered = filter_lists(
         items,
@@ -1040,7 +1228,7 @@ def render_body(repository: ListRepository, items: list[SharePointList]) -> None
         environments=st.session_state["selected_environments"],
     )
 
-    render_sidebar(repository, total=len(items), shown=len(filtered))
+    render_sidebar(repository, items, total=len(items), shown=len(filtered))
 
     if not items:
         render_note(
@@ -1053,50 +1241,61 @@ def render_body(repository: ListRepository, items: list[SharePointList]) -> None
         render_note("条件に一致するリストがありません。検索語やフィルターを見直してください。", "warn")
         return
 
-    if st.session_state["table_view"]:
+    if st.session_state["view_mode"] == VIEW_TABLE:
         render_table_view(repository, filtered)
         return
 
     limit = st.session_state["visible_count"]
 
     if st.session_state["group_view"]:
-        # グループは途中で切らない。上限に達するまでのグループを丸ごと表示する。
+        groups = group_by_group_name(filtered)
+        collapsed_names = set(st.session_state["collapsed_groups"])
+
+        # 折りたたみ中のグループは表示件数に数えない（畳めばその分だけ他を出せる）。
         shown_groups: list[tuple[str, list[SharePointList]]] = []
         shown_count = 0
-        for group in group_by_group_name(filtered):
+        for name, group_items in groups:
             if shown_count >= limit and shown_groups:
                 break
-            shown_groups.append(group)
-            shown_count += len(group[1])
+            shown_groups.append((name, group_items))
+            if name not in collapsed_names:
+                shown_count += len(group_items)
 
-        for group_name, group_items in shown_groups:
-            heading_col, delete_col = st.columns([5, 1])
-            with heading_col:
-                render_section_heading(group_name, len(group_items))
-            group_all = [item for item in filtered if (item.group_name or UNCATEGORIZED_GROUP) == group_name]
-            delete_col.button(
-                "グループを削除",
-                key=f"group_delete_{group_name}",
-                help=f"「{group_name}」の{len(group_all)}件をまとめて削除します。",
-                use_container_width=True,
-                on_click=open_bulk_delete_dialog,
-                args=([item.id for item in group_all], f"グループ「{group_name}」の "),
-            )
-            render_tiles(repository, group_items)
-    else:
-        visible = filtered[:limit]
-        shown_count = len(visible)
-        favorites = [item for item in visible if item.favorite]
-        others = [item for item in visible if not item.favorite]
+        expand_col, collapse_col, _ = st.columns([0.5, 0.5, 9])
+        all_names = [name for name, _ in groups]
+        expand_col.button(
+            ":material/unfold_more:",
+            key="expand_all_groups",
+            help="すべてのグループを開く",
+            on_click=set_all_groups_collapsed,
+            args=(all_names, False),
+        )
+        collapse_col.button(
+            ":material/unfold_less:",
+            key="collapse_all_groups",
+            help="すべてのグループを閉じる",
+            on_click=set_all_groups_collapsed,
+            args=(all_names, True),
+        )
 
-        if favorites:
-            render_section_heading("★ お気に入り", len(favorites))
-            render_tiles(repository, favorites)
-        if others:
-            render_section_heading("すべてのリスト" if favorites else "リスト", len(others))
-            render_tiles(repository, others)
+        for name, group_items in shown_groups:
+            render_group_section(repository, name, group_items, group_items)
 
-    render_pager(shown_count, len(filtered))
+        render_pager(len(shown_groups), len(groups), unit="グループ")
+        return
+
+    visible = filtered[:limit]
+    favorites = [item for item in visible if item.favorite]
+    others = [item for item in visible if not item.favorite]
+
+    if favorites:
+        render_section_heading("★ お気に入り", len(favorites))
+        render_items(repository, favorites)
+    if others:
+        render_section_heading("すべてのリスト" if favorites else "リスト", len(others))
+        render_items(repository, others)
+
+    render_pager(len(visible), len(filtered))
 
 
 def show_more() -> None:
@@ -1107,21 +1306,23 @@ def show_all(total: int) -> None:
     st.session_state["visible_count"] = total
 
 
-def render_pager(shown: int, total: int) -> None:
+def render_pager(shown: int, total: int, unit: str = "件") -> None:
     """未表示分があれば「さらに表示」を出す。"""
     if shown >= total:
         return
     st.markdown("---")
-    render_note(f"{total}件のうち{shown}件を表示しています（動作を軽く保つため件数を制限しています）。")
+    render_note(
+        f"{total}{unit}のうち{shown}{unit}を表示しています（動作を軽く保つため表示量を制限しています）。"
+    )
     more_col, all_col, _ = st.columns([1.2, 1.2, 4])
     more_col.button(
-        f"さらに{min(PAGE_SIZE, total - shown)}件表示",
+        f"さらに表示",
         use_container_width=True,
         key="show_more",
         on_click=show_more,
     )
     all_col.button(
-        f"すべて表示（{total}件）",
+        f"すべて表示（{total}{unit}）",
         use_container_width=True,
         key="show_all",
         on_click=show_all,
