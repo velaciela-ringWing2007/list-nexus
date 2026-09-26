@@ -50,6 +50,8 @@ SharePointのデータそのものは読み書きしません。リンク情報�
 * このアプリが自分で追加したパッケージはありません。上の表はすべてStreamlitの依存です。
 * `pandas` / `numpy` / `pyarrow` は容量が大きく（合計数百MB）、インストール時にプロキシ設定が必要な環境があります。
 * Streamlitの使用状況送信（telemetry）は `.streamlit/config.toml` の `gatherUsageStats = false` で無効化しています。
+* 画面右上のツールバー（Streamlit Cloudへの「Deploy」ボタンを含む）は `toolbarMode = "minimal"` で非表示にしています。
+  再実行が必要なときは `R` キーまたはブラウザの再読み込みを使ってください。
 * アプリのコードから外部へ通信する処理はありません。待ち受けも `127.0.0.1` のみです。
 * 社内でパッケージの申請や許可リストが必要な場合は、上の一覧をそのまま提出できます。
   導入済みのバージョンを固定したい場合は `python -m pip freeze > requirements.lock.txt` で出力してください。
