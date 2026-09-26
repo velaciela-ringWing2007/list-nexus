@@ -84,6 +84,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "target_id": None,
     "bulk_target_ids": [],
     "bulk_target_label": "",
+    "table_rows": [],
     "import_entries": [],
     "import_policy": DUPLICATE_SKIP,
     "import_source_label": "",
@@ -732,68 +733,190 @@ def render_tiles(repository: ListRepository, items: list[SharePointList]) -> Non
 # ----------------------------------------------------------------------
 # 表ビュー（まとめて管理）
 # ----------------------------------------------------------------------
+# 表で編集できる列（この列だけを差分判定と保存の対象にする）
+TABLE_EDITABLE_COLUMNS: tuple[str, ...] = (
+    "★",
+    "リスト名",
+    "サイト名",
+    "グループ",
+    "環境",
+    "タグ",
+    "表示順",
+)
+
+# 環境は日本語ラベルで選ばせ、保存時に内部値へ戻す。
+ENVIRONMENT_OPTIONS: list[str] = [environment_label(value) for value in ENVIRONMENT_VALUES]
+LABEL_TO_ENVIRONMENT: dict[str, str] = {
+    environment_label(value): value for value in ENVIRONMENT_VALUES
+}
+
+
 def build_table_rows(items: list[SharePointList]) -> list[dict[str, Any]]:
-    """表ビュー用の行データを作る。"""
+    """表ビュー用の行データを作る。
+
+    ID列は画面には出さず、編集結果を元のレコードへ突き合わせるために使う
+    （表を並べ替えても行の対応がずれないようにするため）。
+    """
     return [
         {
+            "ID": item.id,
+            "選択": False,
             "★": item.favorite,
             "リスト名": item.name,
             "サイト名": item.site_name,
-            "グループ": item.group_name or UNCATEGORIZED_GROUP,
+            "グループ": item.group_name,
             "環境": environment_label(item.environment),
             "タグ": ", ".join(item.tags),
+            "表示順": item.sort_order,
             "開く": item.list_url,
             "設定": item.settings_url,
-            "更新日時": item.updated_at[:16].replace("T", " "),
         }
         for item in items
     ]
 
 
+def _as_int(value: Any) -> Any:
+    """表のセル値を整数向けに整える（空欄やNaNは0にする）。"""
+    if value is None or value == "":
+        return 0
+    if isinstance(value, float) and value != value:  # NaN
+        return 0
+    return value
+
+
+def collect_table_updates(
+    items: list[SharePointList], rows: list[dict[str, Any]]
+) -> tuple[list[SharePointList], list[str]]:
+    """表の編集結果から、変更があった行だけを検証済みモデルにして返す。
+
+    表に出していない項目（URL・説明・新規作成URL）は既存の値を引き継ぐ。
+    検証に失敗した行はエラーメッセージにして、他の行の保存は続行する。
+    """
+    by_id = {item.id: item for item in items}
+    original_by_id = {row["ID"]: row for row in build_table_rows(items)}
+
+    updates: list[SharePointList] = []
+    errors: list[str] = []
+
+    for row in rows:
+        item = by_id.get(row.get("ID"))
+        if item is None:
+            continue
+        before = original_by_id[item.id]
+        if all(row.get(column) == before.get(column) for column in TABLE_EDITABLE_COLUMNS):
+            continue
+
+        label = str(before.get("リスト名") or item.name)
+        try:
+            updates.append(
+                build_list(
+                    id=item.id,
+                    name=row.get("リスト名"),
+                    list_url=item.list_url,
+                    new_item_url=item.new_item_url,
+                    settings_url=item.settings_url,
+                    site_name=row.get("サイト名"),
+                    group_name=row.get("グループ"),
+                    tags=row.get("タグ"),
+                    environment=LABEL_TO_ENVIRONMENT.get(str(row.get("環境") or ""), ""),
+                    description=item.description,
+                    favorite=bool(row.get("★")),
+                    sort_order=_as_int(row.get("表示順")),
+                )
+            )
+        except ValidationError as exc:
+            errors.append(f"{label}: {exc}")
+
+    return updates, errors
+
+
+def save_table_edits(repository: ListRepository, items: list[SharePointList]) -> None:
+    """表の編集内容を保存する。"""
+    rows: list[dict[str, Any]] = st.session_state.get("table_rows", [])
+    updates, errors = collect_table_updates(items, rows)
+
+    saved = 0
+    for item in updates:
+        try:
+            repository.update(item)
+            saved += 1
+        except (DuplicateUrlError, DatabaseError) as exc:
+            logger.exception("表からの更新に失敗しました")
+            errors.append(f"{item.name}: {exc}")
+
+    if saved:
+        flash(f"{saved}件を更新しました。")
+    for message in errors[:10]:
+        flash(message, "error")
+    if len(errors) > 10:
+        flash(f"他 {len(errors) - 10}件のエラーがあります。", "error")
+    if not saved and not errors:
+        flash("変更はありませんでした。", "warning")
+
+    # 編集の保留状態を消してから再描画する（保存済みの編集が残らないように）。
+    st.session_state.pop("manage_table", None)
+
+
 def render_table_view(repository: ListRepository, items: list[SharePointList]) -> None:
-    """一覧を表で表示し、選択した行をまとめて削除できるようにする。
+    """一覧を表で表示し、まとめて編集・削除できるようにする。
 
     行ごとにウィジェットを作らないため、件数が多くても軽い。
     """
     render_section_heading("表でまとめて管理", len(items))
     st.caption(
-        "行をクリックして選択（Shift / Ctrl で複数選択）してから、下のボタンで削除します。"
-        "「開く」「設定」のリンクは新しいタブで開きます。"
+        "セルをダブルクリックで編集し、「変更を保存」で反映します。"
+        "削除は「選択」にチェックを入れてから行ってください。"
+        "URLと説明はこの表では変更できません（タイルの「編集」から変更してください）。"
     )
 
-    event = st.dataframe(
+    edited = st.data_editor(
         build_table_rows(items),
         key="manage_table",
         use_container_width=True,
         hide_index=True,
-        on_select="rerun",
-        selection_mode="multi-row",
+        num_rows="fixed",
         height=min(120 + 35 * len(items), 620),
+        disabled=["開く", "設定"],
         column_config={
-            "★": st.column_config.CheckboxColumn("★", width="small"),
-            "リスト名": st.column_config.TextColumn("リスト名", width="large"),
+            "ID": None,
+            "選択": st.column_config.CheckboxColumn("選択", width="small", help="削除する行"),
+            "★": st.column_config.CheckboxColumn("★", width="small", help="お気に入り"),
+            "リスト名": st.column_config.TextColumn("リスト名", width="large", required=True),
             "サイト名": st.column_config.TextColumn("サイト名", width="small"),
-            "グループ": st.column_config.TextColumn("グループ", width="small"),
-            "環境": st.column_config.TextColumn("環境", width="small"),
-            "タグ": st.column_config.TextColumn("タグ", width="small"),
+            "グループ": st.column_config.TextColumn(
+                "グループ", width="small", help="空欄は未分類として扱います"
+            ),
+            "環境": st.column_config.SelectboxColumn(
+                "環境", width="small", options=ENVIRONMENT_OPTIONS
+            ),
+            "タグ": st.column_config.TextColumn("タグ", width="medium", help="カンマ区切り"),
+            "表示順": st.column_config.NumberColumn("表示順", width="small", step=1),
             "開く": st.column_config.LinkColumn("開く", display_text="一覧", width="small"),
             "設定": st.column_config.LinkColumn("設定", display_text="設定", width="small"),
-            "更新日時": st.column_config.TextColumn("更新日時", width="small"),
         },
     )
+    st.session_state["table_rows"] = edited
 
-    selected_rows = list(getattr(event.selection, "rows", []) or [])
-    selected = [items[index] for index in selected_rows if index < len(items)]
+    pending, _ = collect_table_updates(items, edited)
+    selected_ids = [row.get("ID") for row in edited if row.get("選択")]
 
-    selected_col, all_col, _ = st.columns([1.4, 1.6, 3])
-    selected_col.button(
-        f"選択した{len(selected)}件を削除" if selected else "選択した行を削除",
-        type="primary" if selected else "secondary",
+    save_col, selected_col, all_col, _ = st.columns([1.5, 1.5, 1.6, 2])
+    save_col.button(
+        f"変更を保存（{len(pending)}件）" if pending else "変更を保存",
+        type="primary" if pending else "secondary",
         use_container_width=True,
-        disabled=not selected,
+        disabled=not pending,
+        key="table_save",
+        on_click=save_table_edits,
+        args=(repository, items),
+    )
+    selected_col.button(
+        f"選択した{len(selected_ids)}件を削除" if selected_ids else "選択した行を削除",
+        use_container_width=True,
+        disabled=not selected_ids,
         key="table_delete_selected",
         on_click=open_bulk_delete_dialog,
-        args=([item.id for item in selected], "選択した "),
+        args=(selected_ids, "選択した "),
     )
     all_col.button(
         f"表示中の{len(items)}件をすべて削除",
