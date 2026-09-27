@@ -17,6 +17,7 @@ from constants import (
     APP_ICON,
     APP_NAME,
     DATABASE_PATH,
+    DEFAULT_SPACE,
     DUPLICATE_ERROR,
     DUPLICATE_POLICY_LABELS,
     DUPLICATE_SKIP,
@@ -32,15 +33,16 @@ from models import SharePointList, ValidationError, build_list, now_iso, to_expo
 from repositories import (
     DuplicateUrlError,
     ListRepository,
+    SpaceError,
     filter_lists,
     group_by_group_name,
     save_import_items,
 )
 from styles import (
     apply_styles,
+    render_app_bar,
     chip,
     environment_chip,
-    render_brand,
     render_description,
     render_group_bar,
     render_link_row,
@@ -61,6 +63,18 @@ VIEW_TILE = "タイル"
 VIEW_TABLE = "表（編集）"
 VIEW_MODES: tuple[str, ...] = (VIEW_LIST, VIEW_TILE, VIEW_TABLE)
 
+# 画面（親レイアウト）
+SCREEN_MAIN = "main"
+SCREEN_SETTINGS = "settings"
+
+# 設定画面のセクション
+SETTINGS_TABS = "タブの管理"
+SETTINGS_DATA = "データ"
+SETTINGS_SECTIONS: tuple[str, ...] = (SETTINGS_TABS, SETTINGS_DATA)
+
+# 取り込み先タブの選択肢で「データに書かれたタブに従う」を表す値
+KEEP_SOURCE_SPACE = "（元のデータに従う）"
+
 # 1画面に描画するタイルの既定数。Streamlitは1クリックごとに全ウィジェットを
 # 再描画するため、件数が多いと操作が重くなる。既定を抑えて「さらに表示」で伸ばす。
 PAGE_SIZE = 50
@@ -77,9 +91,13 @@ FORM_KEYS: dict[str, Any] = {
     "form_description": "",
     "form_favorite": False,
     "form_sort_order": 0,
+    "form_space": DEFAULT_SPACE,
 }
 
 DEFAULT_STATE: dict[str, Any] = {
+    "screen": SCREEN_MAIN,
+    "active_space": DEFAULT_SPACE,
+    "settings_section": SETTINGS_TABS,
     "search_query": "",
     "favorites_only": False,
     "selected_groups": [],
@@ -159,6 +177,7 @@ def prime_form(item: SharePointList | None = None, **overrides: Any) -> None:
                 "form_description": item.description,
                 "form_favorite": item.favorite,
                 "form_sort_order": item.sort_order,
+                "form_space": item.space,
             }
         )
     values.update(overrides)
@@ -167,7 +186,7 @@ def prime_form(item: SharePointList | None = None, **overrides: Any) -> None:
 
 
 def open_create_dialog() -> None:
-    prime_form(None)
+    prime_form(None, form_space=st.session_state.get("active_space", DEFAULT_SPACE))
     st.session_state["dialog"] = "create"
     st.session_state["target_id"] = None
 
@@ -201,6 +220,23 @@ def clear_import_widget_state() -> None:
     st.session_state["import_rows"] = []
 
 
+def go_to_settings(section: str = SETTINGS_TABS) -> None:
+    st.session_state["screen"] = SCREEN_SETTINGS
+    st.session_state["settings_section"] = section
+
+
+def go_to_main() -> None:
+    st.session_state["screen"] = SCREEN_MAIN
+
+
+def select_space(space: str) -> None:
+    """タブを切り替える。タブごとに絞り込みは独立させたいのでリセットする。"""
+    st.session_state["active_space"] = space
+    st.session_state["screen"] = SCREEN_MAIN
+    reset_filters()
+    st.session_state["collapsed_groups"] = []
+
+
 def open_import_dialog(mode: str) -> None:
     st.session_state["dialog"] = mode
     st.session_state["import_entries"] = []
@@ -222,8 +258,12 @@ def close_dialog() -> None:
 # ----------------------------------------------------------------------
 # 登録・編集フォーム
 # ----------------------------------------------------------------------
-def render_list_form() -> dict[str, Any]:
+def render_list_form(spaces: Sequence[str]) -> dict[str, Any]:
     """登録・編集フォームを描画し、入力値を返す。"""
+    options = list(spaces) or [DEFAULT_SPACE]
+    if st.session_state.get("form_space") not in options:
+        st.session_state["form_space"] = options[0]
+    st.selectbox("タブ", options=options, key="form_space", help="この項目をどのタブで管理するか")
     st.text_input("リスト名 *", key="form_name", placeholder="障害管理")
     st.text_input(
         "一覧URL *",
@@ -251,6 +291,7 @@ def render_list_form() -> dict[str, Any]:
 
     return {
         "name": st.session_state["form_name"],
+        "space": st.session_state["form_space"],
         "list_url": st.session_state["form_list_url"],
         "settings_url": st.session_state["form_settings_url"],
         "site_name": st.session_state["form_site_name"],
@@ -265,7 +306,7 @@ def render_list_form() -> dict[str, Any]:
 
 @st.dialog("リストを登録", width="large")
 def create_dialog(repository: ListRepository) -> None:
-    values = render_list_form()
+    values = render_list_form(repository.spaces())
     save_col, cancel_col = st.columns([1, 1])
 
     if save_col.button("登録", type="primary", use_container_width=True, key="create_submit"):
@@ -307,7 +348,7 @@ def edit_dialog(repository: ListRepository) -> None:
             st.rerun()
         return
 
-    values = render_list_form()
+    values = render_list_form(repository.spaces())
     save_col, cancel_col = st.columns([1, 1])
 
     if save_col.button("更新", type="primary", use_container_width=True, key="edit_submit"):
@@ -438,6 +479,7 @@ def entry_to_state(entry: ParsedEntry) -> dict[str, Any]:
     """プレビュー用に ParsedEntry を素の辞書へ変換する。"""
     return {
         "name": entry.name,
+        "space": entry.space,
         "list_url": entry.list_url,
         "new_item_url": entry.new_item_url,
         "settings_url": entry.settings_url,
@@ -504,6 +546,17 @@ def render_import_preview(repository: ListRepository) -> None:
         "セルをダブルクリックで修正、ヘッダーで並べ替えできます。"
     )
 
+    spaces = repository.spaces()
+    space_options = [KEEP_SOURCE_SPACE] + spaces
+    if st.session_state.get("import_space") not in space_options:
+        st.session_state["import_space"] = st.session_state.get("active_space", DEFAULT_SPACE)
+    st.selectbox(
+        "取り込み先のタブ",
+        options=space_options,
+        key="import_space",
+        help="「元のデータに従う」を選ぶと、バックアップに記録されたタブをそのまま復元します。",
+    )
+
     rows = build_preview_rows(repository, entries)
     invalid_count = sum(1 for entry in entries if entry["errors"])
     duplicate_count = sum(1 for row in rows if row["状態"].startswith("⟳"))
@@ -553,6 +606,16 @@ def render_import_preview(repository: ListRepository) -> None:
         st.rerun()
 
 
+def resolve_import_space(entry: dict[str, Any]) -> str:
+    """取り込み先のタブを決める（選択が優先、未選択なら元データ→現在のタブ）。"""
+    selected = st.session_state.get("import_space", KEEP_SOURCE_SPACE)
+    if selected != KEEP_SOURCE_SPACE:
+        return selected
+    return str(entry.get("space") or "").strip() or st.session_state.get(
+        "active_space", DEFAULT_SPACE
+    )
+
+
 def collect_selected_items(
     entries: list[dict[str, Any]], rows: list[dict[str, Any]]
 ) -> tuple[list[SharePointList], list[str]]:
@@ -573,6 +636,7 @@ def collect_selected_items(
             items.append(
                 build_list(
                     name=row.get("リスト名"),
+                    space=resolve_import_space(entry),
                     list_url=row.get("一覧URL"),
                     new_item_url=entry.get("new_item_url", ""),
                     settings_url=entry.get("settings_url", ""),
@@ -599,6 +663,13 @@ def commit_import(repository: ListRepository, entries: list[dict[str, Any]]) -> 
     if not items and not errors:
         flash("取り込む行が選択されていません。", "warning")
         st.rerun()
+
+    # 取り込み先のタブが未登録なら先に作る（バックアップ復元でタブも再現される）。
+    for space in {item.space for item in items}:
+        try:
+            repository.add_space(space)
+        except (SpaceError, DatabaseError) as exc:
+            logger.warning("タブの自動作成に失敗しました: %s", exc)
 
     summary = save_import_items(repository, items, st.session_state["import_policy"])
     errors.extend(summary.errors)
@@ -831,6 +902,7 @@ def set_all_groups_collapsed(group_names: Sequence[str], collapsed: bool) -> Non
 # ----------------------------------------------------------------------
 # 表で編集できる列（この列だけを差分判定と保存の対象にする）
 TABLE_EDITABLE_COLUMNS: tuple[str, ...] = (
+    "タブ",
     "★",
     "リスト名",
     "サイト名",
@@ -857,6 +929,7 @@ def build_table_rows(items: list[SharePointList]) -> list[dict[str, Any]]:
         {
             "ID": item.id,
             "選択": False,
+            "タブ": item.space,
             "★": item.favorite,
             "リスト名": item.name,
             "サイト名": item.site_name,
@@ -908,6 +981,7 @@ def collect_table_updates(
                 build_list(
                     id=item.id,
                     name=row.get("リスト名"),
+                    space=row.get("タブ"),
                     list_url=item.list_url,
                     new_item_url=item.new_item_url,
                     settings_url=item.settings_url,
@@ -961,10 +1035,12 @@ def render_table_view(repository: ListRepository, items: list[SharePointList]) -
     render_section_heading("表でまとめて管理", len(items))
     st.caption(
         "セルをダブルクリックで編集し、「変更を保存」で反映します。"
+        "「タブ」を変えると、その行は別のタブへ移動します。"
         "削除は「選択」にチェックを入れてから行ってください。"
         "URLと説明はこの表では変更できません（タイルの「編集」から変更してください）。"
     )
 
+    spaces = repository.spaces()
     edited = st.data_editor(
         build_table_rows(items),
         key="manage_table",
@@ -976,6 +1052,9 @@ def render_table_view(repository: ListRepository, items: list[SharePointList]) -
         column_config={
             "ID": None,
             "選択": st.column_config.CheckboxColumn("選択", width="small", help="削除する行"),
+            "タブ": st.column_config.SelectboxColumn(
+                "タブ", width="small", options=spaces, help="変更すると別のタブへ移動します"
+            ),
             "★": st.column_config.CheckboxColumn("★", width="small", help="お気に入り"),
             "リスト名": st.column_config.TextColumn("リスト名", width="large", required=True),
             "サイト名": st.column_config.TextColumn("サイト名", width="small"),
@@ -1070,13 +1149,14 @@ def render_group_nav(items: list[SharePointList]) -> None:
         )
 
 
-def render_sidebar(
+def render_side_nav(
     repository: ListRepository,
+    space: str,
     items: list[SharePointList],
-    total: int,
     shown: int,
 ) -> None:
-    with st.sidebar:
+    """左ナビ（表示スタイル・グループ・フィルター）。内容は現在のタブに限定する。"""
+    with st.container(key="ln-nav"):
         st.markdown("### 表示")
         st.radio(
             "表示スタイル",
@@ -1094,13 +1174,13 @@ def render_sidebar(
         st.checkbox("お気に入りのみ", key="favorites_only", on_change=reset_visible_count)
         st.multiselect(
             "タグ",
-            options=repository.tag_names(),
+            options=repository.tag_names(space),
             key="selected_tags",
             on_change=reset_visible_count,
         )
         st.multiselect(
             "環境",
-            options=repository.environments(),
+            options=repository.environments(space),
             format_func=environment_label,
             key="selected_environments",
             on_change=reset_visible_count,
@@ -1109,8 +1189,7 @@ def render_sidebar(
         st.button("フィルターをすべて解除", use_container_width=True, on_click=reset_filters)
 
         st.markdown("---")
-        st.caption(f"表示 {shown} / 登録 {total} 件")
-        st.caption(f"DB: {DATABASE_PATH}")
+        st.caption(f"表示 {shown} / 「{space}」{len(items)} 件")
 
 
 def reset_visible_count() -> None:
@@ -1137,8 +1216,7 @@ def build_export_bytes(items: list[SharePointList]) -> bytes:
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
 
-def render_header(items: list[SharePointList]) -> None:
-    render_brand()
+def render_toolbar(items: list[SharePointList]) -> None:
     with st.container(key="ln-header"):
         search_col, create_col, paste_col, json_col, export_col = st.columns(
             [9, 1.8, 0.5, 0.5, 0.5], vertical_alignment="center"
@@ -1184,6 +1262,297 @@ def render_header(items: list[SharePointList]) -> None:
 
 
 # ----------------------------------------------------------------------
+# 上部バー（タブ切り替え・設定）
+# ----------------------------------------------------------------------
+def ensure_active_space(spaces: Sequence[str]) -> str:
+    """現在のタブが消えている場合に備えて、有効なタブ名へ寄せる。"""
+    active = st.session_state.get("active_space", DEFAULT_SPACE)
+    if active not in spaces:
+        active = spaces[0] if spaces else DEFAULT_SPACE
+        st.session_state["active_space"] = active
+    return active
+
+
+def render_top_bar(repository: ListRepository, spaces: Sequence[str], counts: dict[str, int]) -> None:
+    """アプリ名・タブ・設定ボタンを全幅で描画する。"""
+    with st.container(key="ln-topbar"):
+        brand_col, tabs_col, settings_col = st.columns(
+            [2.6, 8, 0.5], vertical_alignment="bottom"
+        )
+        with brand_col:
+            render_app_bar()
+
+        with tabs_col:
+            with st.container(key="ln-tabs"):
+                active = st.session_state["active_space"]
+                widths = [1.4] * len(spaces) + [0.45, 4]
+                columns = st.columns(widths, vertical_alignment="bottom")
+                for column, name in zip(columns, spaces):
+                    column.button(
+                        f"{name}（{counts.get(name, 0)}）",
+                        key=f"space_tab_{name}",
+                        type="primary" if name == active else "secondary",
+                        use_container_width=True,
+                        on_click=select_space,
+                        args=(name,),
+                    )
+                columns[len(spaces)].button(
+                    ":material/add:",
+                    key="space_tab_add",
+                    help="タブを追加する",
+                    on_click=open_space_dialog,
+                )
+
+        settings_col.button(
+            ":material/settings:",
+            key="open_settings",
+            help="設定（タブの管理・データ）",
+            on_click=go_to_settings,
+        )
+
+
+@st.dialog("タブを追加")
+def space_add_dialog(repository: ListRepository) -> None:
+    st.caption("用途ごとに画面を分けられます（例: リスト / Forms / サイト）。")
+    st.text_input("タブ名", key="new_space_name", placeholder="Forms")
+
+    add_col, cancel_col = st.columns([1, 1])
+    if add_col.button("追加", type="primary", use_container_width=True, key="space_add_submit"):
+        try:
+            name = repository.add_space(st.session_state.get("new_space_name", ""))
+        except (SpaceError, DatabaseError) as exc:
+            st.error(str(exc), icon="⛔")
+        else:
+            flash(f"タブ「{name}」を追加しました。")
+            close_dialog()
+            select_space(name)
+            st.rerun()
+
+    if cancel_col.button("キャンセル", use_container_width=True, key="space_add_cancel"):
+        close_dialog()
+        st.rerun()
+
+
+@st.dialog("タブの削除")
+def space_delete_dialog(repository: ListRepository) -> None:
+    target = st.session_state.get("space_target", "")
+    spaces = repository.spaces()
+    others = [name for name in spaces if name != target]
+    count = repository.count(target)
+
+    st.warning(f"タブ「{target}」を削除しますか？", icon="⚠️")
+    if count:
+        st.caption(f"このタブには {count} 件あります。中身の扱いを選んでください。")
+        choice = st.radio(
+            "中身の扱い",
+            options=["移動する", "一緒に削除する"],
+            key="space_delete_mode",
+            horizontal=True,
+        )
+        move_to = None
+        if choice == "移動する":
+            move_to = st.selectbox("移動先のタブ", options=others, key="space_delete_move_to")
+    else:
+        st.caption("このタブは空です。")
+        move_to = others[0] if others else None
+
+    delete_col, cancel_col = st.columns([1, 1])
+    if delete_col.button(
+        "削除する", type="primary", use_container_width=True, key="space_delete_submit"
+    ):
+        try:
+            affected = repository.delete_space(
+                target, move_to if (not count or st.session_state.get("space_delete_mode") != "一緒に削除する") else None
+            )
+        except (SpaceError, DatabaseError) as exc:
+            st.error(str(exc), icon="⛔")
+        else:
+            flash(f"タブ「{target}」を削除しました（対象 {affected} 件）。")
+            close_dialog()
+            st.rerun()
+
+    if cancel_col.button("キャンセル", use_container_width=True, key="space_delete_cancel"):
+        close_dialog()
+        st.rerun()
+
+
+# ----------------------------------------------------------------------
+# 設定画面
+# ----------------------------------------------------------------------
+def open_space_dialog() -> None:
+    st.session_state["dialog"] = "space_add"
+    st.session_state["new_space_name"] = ""
+
+
+def open_space_delete_dialog(name: str) -> None:
+    st.session_state["dialog"] = "space_delete"
+    st.session_state["space_target"] = name
+
+
+def move_space_order(repository: ListRepository, names: Sequence[str], index: int, delta: int) -> None:
+    order = list(names)
+    target = index + delta
+    if 0 <= target < len(order):
+        order[index], order[target] = order[target], order[index]
+        try:
+            repository.reorder_spaces(order)
+        except DatabaseError as exc:
+            flash(str(exc), "error")
+
+
+def save_space_names(repository: ListRepository, names: Sequence[str]) -> None:
+    """設定画面で編集されたタブ名をまとめて反映する。"""
+    renamed = 0
+    for name in names:
+        new_name = str(st.session_state.get(f"space_name_{name}", name)).strip()
+        if not new_name or new_name == name:
+            continue
+        try:
+            repository.rename_space(name, new_name)
+            renamed += 1
+        except (SpaceError, DatabaseError) as exc:
+            flash(f"{name}: {exc}", "error")
+        else:
+            if st.session_state.get("active_space") == name:
+                st.session_state["active_space"] = new_name
+    if renamed:
+        flash(f"タブ名を {renamed} 件変更しました。")
+    else:
+        flash("変更はありませんでした。", "warning")
+
+
+def render_space_settings(repository: ListRepository, spaces: Sequence[str]) -> None:
+    render_section_heading("タブの管理", len(spaces))
+    st.caption(
+        "タブは用途ごとの入れ物です（例: リスト / Forms）。"
+        "名前を直して「名前の変更を保存」を押すと、中身もまとめて付け替わります。"
+    )
+
+    counts = repository.count_by_space()
+    header = st.columns([4, 1, 0.5, 0.5, 0.6], vertical_alignment="center")
+    header[0].markdown("**タブ名**")
+    header[1].markdown("**件数**")
+    header[4].markdown("**削除**")
+
+    for index, name in enumerate(spaces):
+        cols = st.columns([4, 1, 0.5, 0.5, 0.6], vertical_alignment="center")
+        cols[0].text_input(
+            "タブ名", key=f"space_name_{name}", value=name, label_visibility="collapsed"
+        )
+        cols[1].markdown(f"{counts.get(name, 0)} 件")
+        cols[2].button(
+            ":material/arrow_upward:",
+            key=f"space_up_{name}",
+            help="上へ",
+            disabled=index == 0,
+            on_click=move_space_order,
+            args=(repository, spaces, index, -1),
+        )
+        cols[3].button(
+            ":material/arrow_downward:",
+            key=f"space_down_{name}",
+            help="下へ",
+            disabled=index == len(spaces) - 1,
+            on_click=move_space_order,
+            args=(repository, spaces, index, 1),
+        )
+        cols[4].button(
+            ":material/delete:",
+            key=f"space_delete_{name}",
+            help="このタブを削除",
+            disabled=len(spaces) <= 1,
+            on_click=open_space_delete_dialog,
+            args=(name,),
+        )
+
+    st.markdown("")
+    save_col, add_col, _ = st.columns([1.4, 1.4, 5])
+    save_col.button(
+        "名前の変更を保存",
+        type="primary",
+        use_container_width=True,
+        key="space_save_names",
+        on_click=save_space_names,
+        args=(repository, spaces),
+    )
+    add_col.button(
+        "タブを追加",
+        icon=":material/add:",
+        use_container_width=True,
+        key="space_add_from_settings",
+        on_click=open_space_dialog,
+    )
+
+
+def render_data_settings(repository: ListRepository) -> None:
+    render_section_heading("データ")
+    counts = repository.count_by_space()
+    total = sum(counts.values())
+    st.markdown(f"登録件数: **{total} 件**")
+    for name, count in counts.items():
+        st.markdown(f"- {name}: {count} 件")
+
+    st.markdown("---")
+    st.markdown("**バックアップと復元**")
+    st.caption("すべてのタブを1つのJSONにまとめて書き出します。復元時はタブも再現されます。")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_col, restore_col, _ = st.columns([1.6, 1.6, 5])
+    with backup_col:
+        st.download_button(
+            "バックアップ",
+            icon=":material/download:",
+            data=build_export_bytes(repository.list_all()),
+            file_name=f"list-nexus-backup-{timestamp}.json",
+            mime="application/json",
+            use_container_width=True,
+            disabled=not total,
+        )
+    restore_col.button(
+        "JSONから復元",
+        icon=":material/restore:",
+        use_container_width=True,
+        key="settings_restore",
+        on_click=open_import_dialog,
+        args=("json",),
+    )
+
+    st.markdown("---")
+    st.markdown("**保存場所**")
+    st.code(str(DATABASE_PATH), language=None)
+    st.caption("アプリを終了してからこのファイルを削除すると、空の状態に戻せます。")
+
+
+def render_settings_screen(repository: ListRepository, spaces: Sequence[str]) -> None:
+    nav_col, main_col = st.columns([1.7, 8.3], gap="medium")
+    with nav_col:
+        with st.container(key="ln-nav-settings"):
+            st.button(
+                "一覧に戻る",
+                icon=":material/arrow_back:",
+                use_container_width=True,
+                key="settings_back",
+                on_click=go_to_main,
+            )
+            st.markdown("### 設定")
+            for section in SETTINGS_SECTIONS:
+                st.button(
+                    section,
+                    key=f"settings_nav_{section}",
+                    use_container_width=True,
+                    type="primary"
+                    if st.session_state["settings_section"] == section
+                    else "secondary",
+                    on_click=lambda name=section: st.session_state.update(settings_section=name),
+                )
+
+    with main_col:
+        if st.session_state["settings_section"] == SETTINGS_TABS:
+            render_space_settings(repository, spaces)
+        else:
+            render_data_settings(repository)
+
+
+# ----------------------------------------------------------------------
 # メイン
 # ----------------------------------------------------------------------
 def render_group_section(
@@ -1222,8 +1591,8 @@ def render_group_section(
             render_items(repository, group_items)
 
 
-def render_body(repository: ListRepository, items: list[SharePointList]) -> None:
-    filtered = filter_lists(
+def apply_filters(items: list[SharePointList]) -> list[SharePointList]:
+    return filter_lists(
         items,
         query=st.session_state["search_query"],
         favorites_only=st.session_state["favorites_only"],
@@ -1232,12 +1601,16 @@ def render_body(repository: ListRepository, items: list[SharePointList]) -> None
         environments=st.session_state["selected_environments"],
     )
 
-    render_sidebar(repository, items, total=len(items), shown=len(filtered))
 
+def render_results(
+    repository: ListRepository,
+    items: list[SharePointList],
+    filtered: list[SharePointList],
+) -> None:
     if not items:
         render_note(
-            "まだリストが登録されていません。"
-            "右上の「＋ 登録」またはBookmarkletの出力を「貼り付け取込」から登録してください。"
+            f"「{st.session_state['active_space']}」にはまだ何も登録されていません。"
+            "「登録」ボタン、またはBookmarkletの出力を「取込」から登録してください。"
         )
         return
 
@@ -1344,6 +1717,10 @@ def render_dialogs(repository: ListRepository) -> None:
         delete_dialog(repository)
     elif dialog == "bulk_delete":
         bulk_delete_dialog(repository)
+    elif dialog == "space_add":
+        space_add_dialog(repository)
+    elif dialog == "space_delete":
+        space_delete_dialog(repository)
     elif dialog == "paste":
         paste_import_dialog(repository)
     elif dialog == "json":
@@ -1355,25 +1732,37 @@ def main() -> None:
         page_title=APP_NAME,
         page_icon=APP_ICON,
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     apply_styles()
     init_state()
 
     try:
         repository = get_repository()
-        items = repository.list_all()
+        spaces = repository.spaces()
+        counts = repository.count_by_space()
     except DatabaseError as exc:
         logger.exception("データベースの初期化に失敗しました")
         st.error(str(exc), icon="⛔")
         st.stop()
         return
 
-    render_header(items)
+    active_space = ensure_active_space(spaces)
+    render_top_bar(repository, spaces, counts)
     render_flash()
 
     try:
-        render_body(repository, items)
+        if st.session_state["screen"] == SCREEN_SETTINGS:
+            render_settings_screen(repository, spaces)
+        else:
+            items = repository.list_all(active_space)
+            filtered = apply_filters(items)
+            nav_col, main_col = st.columns([1.7, 8.3], gap="medium")
+            with nav_col:
+                render_side_nav(repository, active_space, items, len(filtered))
+            with main_col:
+                render_toolbar(items)
+                render_results(repository, items, filtered)
         render_dialogs(repository)
     except DatabaseError as exc:
         logger.exception("データベース操作に失敗しました")

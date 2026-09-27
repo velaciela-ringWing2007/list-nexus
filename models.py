@@ -9,8 +9,10 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from constants import (
+    DEFAULT_SPACE,
     ENVIRONMENT_VALUES,
     MAX_NAME_LENGTH,
+    MAX_SPACE_LENGTH,
     MAX_TAG_LENGTH,
 )
 from url_utils import UrlValidationError, validate_optional_url, validate_url
@@ -27,6 +29,7 @@ class SharePointList:
     id: int | None
     name: str
     list_url: str
+    space: str = DEFAULT_SPACE
     new_item_url: str = ""
     settings_url: str = ""
     site_name: str = ""
@@ -73,6 +76,7 @@ def row_to_list(row: sqlite3.Row) -> SharePointList:
         id=row["id"],
         name=row["name"],
         list_url=row["list_url"],
+        space=row["space"] or DEFAULT_SPACE,
         new_item_url=row["new_item_url"] or "",
         settings_url=row["settings_url"] or "",
         site_name=row["site_name"] or "",
@@ -93,6 +97,7 @@ def list_to_params(item: SharePointList) -> dict[str, Any]:
     return {
         "name": item.name,
         "list_url": item.list_url,
+        "space": item.space,
         "new_item_url": item.new_item_url,
         "settings_url": item.settings_url,
         "site_name": item.site_name,
@@ -113,6 +118,7 @@ def to_export_dict(item: SharePointList) -> dict[str, Any]:
     return {
         "name": item.name,
         "listUrl": item.list_url,
+        "space": item.space,
         "newItemUrl": item.new_item_url,
         "settingsUrl": item.settings_url,
         "siteName": item.site_name,
@@ -125,6 +131,18 @@ def to_export_dict(item: SharePointList) -> dict[str, Any]:
         "createdAt": item.created_at,
         "updatedAt": item.updated_at,
     }
+
+
+def normalize_space(raw: str | None) -> str:
+    """タブ名を検証して正規化する。未入力は既定のタブにする。"""
+    space = (raw or "").strip()
+    if not space:
+        return DEFAULT_SPACE
+    if len(space) > MAX_SPACE_LENGTH:
+        raise ValidationError(
+            f"タブ名が長すぎます。{MAX_SPACE_LENGTH}文字以内で入力してください。"
+        )
+    return space
 
 
 def normalize_name(raw: str | None) -> str:
@@ -188,6 +206,7 @@ def build_list(
     id: int | None = None,
     name: str | None,
     list_url: str | None,
+    space: str | None = None,
     new_item_url: str | None = "",
     settings_url: str | None = "",
     site_name: str | None = "",
@@ -214,6 +233,7 @@ def build_list(
         id=id,
         name=normalize_name(name),
         list_url=validated_list_url,
+        space=normalize_space(space),
         new_item_url=validated_new_item_url,
         settings_url=validated_settings_url,
         site_name=(site_name or "").strip(),

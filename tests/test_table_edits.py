@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from app import build_table_rows, collect_table_updates
+from constants import DEFAULT_SPACE
 from models import SharePointList, build_list
 
 ISSUES_URL = "https://example.sharepoint.com/sites/dev/Lists/Issues/AllItems.aspx"
@@ -108,6 +109,25 @@ class TestEdits:
         updates, errors = collect_table_updates(items, rows)
         assert errors == []
         assert updates[0].sort_order == 0
+
+
+class TestSpaceColumn:
+    def test_space_is_shown(self, items: list[SharePointList]) -> None:
+        rows = build_table_rows(items)
+        assert rows[0]["タブ"] == items[0].space
+
+    def test_changing_space_moves_the_row(self, items: list[SharePointList]) -> None:
+        rows = build_table_rows(items)
+        rows[0]["タブ"] = "Forms"
+        updates, errors = collect_table_updates(items, rows)
+        assert errors == []
+        assert [(u.id, u.space) for u in updates] == [(1, "Forms")]
+
+    def test_blank_space_falls_back_to_default(self, items: list[SharePointList]) -> None:
+        rows = build_table_rows(items)
+        rows[0]["タブ"] = ""
+        updates, _ = collect_table_updates(items, rows)
+        assert updates[0].space == DEFAULT_SPACE
 
 
 class TestPreservesHiddenFields:
