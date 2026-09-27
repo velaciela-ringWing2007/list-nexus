@@ -1139,9 +1139,10 @@ def build_export_bytes(items: list[SharePointList]) -> bytes:
 
 def render_header(items: list[SharePointList]) -> None:
     render_brand()
-    search_col, create_col, paste_col, json_col, export_col = st.columns(
-        [9, 1.8, 0.5, 0.5, 0.5], vertical_alignment="center"
-    )
+    with st.container(key="ln-header"):
+        search_col, create_col, paste_col, json_col, export_col = st.columns(
+            [9, 1.8, 0.5, 0.5, 0.5], vertical_alignment="center"
+        )
 
     with search_col:
         st.text_input(
@@ -1196,9 +1197,10 @@ def render_group_section(
     collapsed = group_name in st.session_state["collapsed_groups"]
 
     with st.container(key=f"ln-group-{index}"):
-        toggle_col, heading_col, delete_col = st.columns(
-            [0.35, 9, 0.45], vertical_alignment="center"
-        )
+        with st.container(key=f"ln-grouphead-{index}"):
+            toggle_col, heading_col, delete_col = st.columns(
+                [0.35, 9, 0.45], vertical_alignment="center"
+            )
         toggle_col.button(
             ":material/chevron_right:" if collapsed else ":material/expand_more:",
             key=f"group_toggle_{group_name}",

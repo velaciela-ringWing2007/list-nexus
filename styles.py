@@ -260,7 +260,8 @@ _CSS = f"""
     gap: 0.25rem;
 }}
 [class*="st-key-ln-row-"] .ln-links a {{
-    padding: 0.18rem 0.5rem;
+    flex: 0 0 3.7rem;
+    padding: 0.18rem 0.3rem;
     font-size: 0.74rem;
     white-space: nowrap;
 }}
@@ -345,6 +346,52 @@ _CSS = f"""
 [class*="st-key-ln-row-"] .stButton > button {{
     padding: 0.25rem 0.4rem;
     min-height: 2rem;
+}}
+
+/* ---------- 列幅の固定 ----------
+   Streamlitの列は比率で配分されるため、画面幅が変わるとアイコン列の幅まで
+   変わってボタンの位置がずれる。アイコン列は固定幅にし、伸縮は
+   名前とURLの列に担わせる（QHDの半分程度の幅でも位置が動かないようにする）。 */
+[class*="st-key-ln-row-"] [data-testid="stHorizontalBlock"],
+[class*="st-key-ln-grouphead-"] [data-testid="stHorizontalBlock"],
+[class*="st-key-ln-header"] [data-testid="stHorizontalBlock"] {{
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+}}
+[class*="st-key-ln-row-"] [data-testid="stColumn"],
+[class*="st-key-ln-grouphead-"] [data-testid="stColumn"],
+[class*="st-key-ln-header"] [data-testid="stColumn"] {{
+    min-width: 0 !important;
+}}
+
+/* リスト行: ★ / 名前 / URL / リンク / 編集 / 削除 */
+[class*="st-key-ln-row-"] [data-testid="stColumn"]:nth-child(1) {{ flex: 0 0 2rem !important; }}
+[class*="st-key-ln-row-"] [data-testid="stColumn"]:nth-child(2) {{ flex: 3 1 0 !important; }}
+[class*="st-key-ln-row-"] [data-testid="stColumn"]:nth-child(3) {{
+    flex: 2 1 0 !important;
+    overflow: hidden;
+}}
+/* リンク列は設定URLの有無にかかわらず同じ幅にして、「開く」の位置を揃える */
+[class*="st-key-ln-row-"] [data-testid="stColumn"]:nth-child(4) {{ flex: 0 0 8rem !important; }}
+[class*="st-key-ln-row-"] [data-testid="stColumn"]:nth-child(5),
+[class*="st-key-ln-row-"] [data-testid="stColumn"]:nth-child(6) {{ flex: 0 0 2.3rem !important; }}
+
+/* グループ見出し: 開閉 / グループ名 / まとめて削除 */
+[class*="st-key-ln-grouphead-"] [data-testid="stColumn"]:nth-child(1) {{ flex: 0 0 2rem !important; }}
+[class*="st-key-ln-grouphead-"] [data-testid="stColumn"]:nth-child(2) {{ flex: 1 1 0 !important; }}
+[class*="st-key-ln-grouphead-"] [data-testid="stColumn"]:nth-child(3) {{ flex: 0 0 2.3rem !important; }}
+
+/* ヘッダー: 検索 / 登録 / 取込 / 復元 / バックアップ */
+[class*="st-key-ln-header"] [data-testid="stColumn"]:nth-child(1) {{ flex: 1 1 0 !important; }}
+[class*="st-key-ln-header"] [data-testid="stColumn"]:nth-child(2) {{ flex: 0 0 6.5rem !important; }}
+[class*="st-key-ln-header"] [data-testid="stColumn"]:nth-child(n+3) {{ flex: 0 0 2.3rem !important; }}
+
+/* アイコンボタンは列いっぱいに広げて、常に同じ位置に置く */
+[class*="st-key-ln-row-"] [data-testid="stColumn"]:nth-child(n+5) .stButton > button,
+[class*="st-key-ln-grouphead-"] [data-testid="stColumn"]:nth-child(3) .stButton > button,
+[class*="st-key-ln-header"] [data-testid="stColumn"]:nth-child(n+3) button {{
+    width: 100%;
+    padding: 0.25rem 0;
 }}
 
 /* ---------- グループの区切り ----------
