@@ -17,6 +17,10 @@ SCHEMA_VERSION: Final[int] = 1
 
 UNCATEGORIZED_GROUP: Final[str] = "未分類"
 
+# タブ（用途ごとの管理単位）。SharePoint List以外もここで分けて管理する。
+DEFAULT_SPACE: Final[str] = "リスト"
+MAX_SPACE_LENGTH: Final[int] = 50
+
 # environment カラムに保存する値と、画面表示に使う日本語ラベル。
 # 未設定（空文字）も許可する。
 ENVIRONMENT_LABELS: Final[dict[str, str]] = {

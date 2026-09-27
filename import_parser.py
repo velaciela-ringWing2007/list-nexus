@@ -37,6 +37,7 @@ _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
 # JSONのキー名ゆれ（camelCase / snake_case / 別名）を吸収する対応表。
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "space": ("space", "tab", "tabName", "tab_name"),
     "name": ("name", "listName", "list_name", "title", "displayName", "display_name"),
     "list_url": ("listUrl", "list_url", "url", "listURL", "viewUrl", "view_url"),
     "new_item_url": ("newItemUrl", "new_item_url", "newUrl", "new_url", "newFormUrl"),
@@ -60,6 +61,7 @@ class ParsedEntry:
     """
 
     name: str = ""
+    space: str = ""
     list_url: str = ""
     new_item_url: str = ""
     settings_url: str = ""
@@ -174,6 +176,7 @@ def entry_from_mapping(payload: dict[str, Any]) -> ParsedEntry:
     """辞書から ParsedEntry を作る（camelCase / snake_case 両対応）。"""
     entry = ParsedEntry(source=SOURCE_JSON)
     entry.name = _as_text(_pick(payload, "name"))
+    entry.space = _as_text(_pick(payload, "space"))
     entry.list_url = normalize_url(_as_text(_pick(payload, "list_url")))
     entry.new_item_url = normalize_url(_as_text(_pick(payload, "new_item_url")))
     entry.settings_url = normalize_url(_as_text(_pick(payload, "settings_url")))

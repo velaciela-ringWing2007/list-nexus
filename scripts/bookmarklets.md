@@ -11,6 +11,7 @@ SharePoint / Microsoft Lists のページから、リスト情報をJSONとし�
 | --- | --- | --- |
 | [サイト内の全リスト一括取得](#サイト内の全リスト一括取得) | サイトのリスト／ライブラリを**全件** | SharePointサイトの任意のページ |
 | [ページ内リンク一括取得](#ページ内リンク一括取得) | ページ内の同一ドメインリンクを全件 | どのWebページでも可 |
+| [このフォームだけ取得](#このフォームだけ取得microsoft-forms) | 開いているフォーム1件 | Formsのデザイン画面 |
 | [このリストだけ取得](#このリストだけ取得specの81) | 開いているリスト1件 | リストの一覧ページ |
 
 大量に登録したいときは **「サイト内の全リスト一括取得」** を使ってください。1サイト分が1回で入ります。
@@ -109,6 +110,36 @@ SharePoint以外のページや、APIが使えない場合は、ページタイ�
 ```javascript
 javascript:(async()=>{const c=window._spPageContextInfo||{};const f=()=>{const m=location.pathname.match(/^\/(sites|teams)\/[^/]+/i);return location.origin+(m?m[0]:'');};const s=String(c.webAbsoluteUrl||f()).replace(/\/+$/,'');const h={Accept:'application/json;odata=nometadata'};const cp=async(d,m)=>{const t=JSON.stringify(d,null,2);try{await navigator.clipboard.writeText(t);alert(m);}catch(e){prompt('コピーしてください',t);}};const tn=()=>document.title.replace(/\s*-\s*Microsoft Lists.*$/i,'').replace(/\s*-\s*SharePoint.*$/i,'').replace(/\s*-\s*すべてのアイテム.*$/,'').trim();const lf=()=>decodeURIComponent(location.pathname).replace(/\/[^/]*\.aspx$/i,'').replace(/\/Forms$/i,'');const id=String(c.pageListId||c.listId||'').replace(/[{}]/g,'');try{const wr=await fetch(s+'/_api/web?$select=Title',{headers:h,credentials:'same-origin'});if(!wr.ok)throw new Error('web '+wr.status);const w=await wr.json();const sel='?$select=Title,Id,Description,DefaultViewUrl';const ep=id?s+"/_api/web/lists(guid'"+id+"')"+sel:s+"/_api/web/getList('"+encodeURI(lf().replace(/'/g,"''"))+"')"+sel;const lr=await fetch(ep,{headers:h,credentials:'same-origin'});if(!lr.ok)throw new Error('list '+lr.status);const i=await lr.json();if(!i||!i.Title)throw new Error('list not found');await cp({name:i.Title,listUrl:i.DefaultViewUrl?location.origin+i.DefaultViewUrl.replace(/ /g,'%20'):location.href,settingsUrl:s+'/_layouts/15/listedit.aspx?List=%7B'+String(i.Id).replace(/[{}]/g,'')+'%7D',siteName:w.Title||'',description:i.Description||''},'このリストをコピーしました\n\n'+i.Title);}catch(e){await cp({name:tn(),listUrl:location.href,sourceTitle:document.title},'ページのタイトルとURLをコピーしました（API未使用）\n\n'+tn());}})();
 ```
+
+## このフォームだけ取得（Microsoft Forms）
+
+Formsのデザイン画面（編集画面）で実行すると、フォーム1件分をコピーします。
+出力の `space` が `Forms` なので、**取り込み時に自動でFormsタブへ入ります**（タブが無ければ作られます）。
+
+| 項目 | 入る値 |
+| --- | --- |
+| リスト名 | フォーム名（ページタイトルから装飾を除いたもの） |
+| 一覧URL | 編集ページ（`DesignPageV2.aspx?id=...`） |
+| 設定URL | 回答ページ（`ResponsePage.aspx?id=...`） |
+
+```json
+{
+  "name": "勤怠連絡フォーム",
+  "space": "Forms",
+  "listUrl": "https://forms.office.com/Pages/DesignPageV2.aspx?id=xxxxx",
+  "settingsUrl": "https://forms.office.com/Pages/ResponsePage.aspx?id=xxxxx",
+  "description": ""
+}
+```
+
+ソース: [bookmarklets/capture-form.js](bookmarklets/capture-form.js)
+
+```javascript
+javascript:(async()=>{const q=new URLSearchParams(location.search);const id=q.get('id')||'';const n=document.title.replace(/\s*-\s*Microsoft Forms.*$/i,'').replace(/\s*-\s*Forms.*$/i,'').replace(/^Microsoft Forms\s*[-|]?\s*/i,'').trim();if(!id){alert('フォームIDが見つかりませんでした。\nFormsのデザイン画面（URLに id= を含むページ）で実行してください。');return;}const d={name:n||'名称未設定のフォーム',space:'Forms',listUrl:location.origin+'/Pages/DesignPageV2.aspx?id='+encodeURIComponent(id),settingsUrl:location.origin+'/Pages/ResponsePage.aspx?id='+encodeURIComponent(id),description:''};const t=JSON.stringify(d,null,2);try{await navigator.clipboard.writeText(t);alert('フォームをコピーしました\n\n'+d.name);}catch(e){prompt('コピーしてください',t);}})();
+```
+
+SharePointのように一括取得はできません。Formsのデータを読むAPIはアクセストークンを要求し、
+Cookieだけでは呼べないためです。フォームを作るたびに1件ずつ拾う運用になります。
 
 ---
 

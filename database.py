@@ -12,7 +12,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from constants import DATABASE_PATH
+from constants import DATABASE_PATH, DEFAULT_SPACE
+from models import now_iso
 
 SCHEMA_SQL: str = """
 CREATE TABLE IF NOT EXISTS lists (
@@ -35,6 +36,12 @@ CREATE TABLE IF NOT EXISTS lists (
 
 CREATE INDEX IF NOT EXISTS idx_lists_group_name ON lists (group_name);
 CREATE INDEX IF NOT EXISTS idx_lists_favorite ON lists (favorite);
+
+CREATE TABLE IF NOT EXISTS spaces (
+    name TEXT PRIMARY KEY,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -87,10 +94,36 @@ def transaction(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         connection.commit()
 
 
+def _migrate(connection: sqlite3.Connection) -> None:
+    """既存DBに後から足した列・テーブルを補う。
+
+    列の追加は ALTER TABLE で行い、既存データはそのまま残す。
+    """
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(lists)")}
+    if "space" not in columns:
+        connection.execute(
+            f"ALTER TABLE lists ADD COLUMN space TEXT NOT NULL DEFAULT '{DEFAULT_SPACE}'"
+        )
+
+    # 既定のタブと、リスト側で使われているタブを spaces へ反映する（自己修復）。
+    connection.execute(
+        "INSERT OR IGNORE INTO spaces (name, sort_order, created_at) VALUES (?, 0, ?)",
+        (DEFAULT_SPACE, now_iso()),
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO spaces (name, sort_order, created_at)
+        SELECT DISTINCT space, 100, ? FROM lists WHERE TRIM(space) <> ''
+        """,
+        (now_iso(),),
+    )
+
+
 def initialize_database(db_path: Path | str = DATABASE_PATH) -> None:
-    """DBファイルとテーブルを作成する。既に存在する場合は何もしない。"""
+    """DBファイルとテーブルを作成し、必要なら既存DBを移行する。"""
     try:
         with connect(db_path) as connection, transaction(connection):
             connection.executescript(SCHEMA_SQL)
+            _migrate(connection)
     except sqlite3.Error as exc:
         raise DatabaseError("データベースの初期化に失敗しました。") from exc

@@ -91,6 +91,53 @@ _CSS = f"""
     background: linear-gradient(90deg, var(--ln-accent), rgba(244, 114, 208, 0.55), transparent);
 }}
 
+/* ---------- 画面上部のバー ---------- */
+.ln-appbar {{
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    white-space: nowrap;
+    overflow: hidden;
+}}
+/* 幅が足りないときは副題を隠してタブと重ならないようにする */
+@media (max-width: 1500px) {{
+    .ln-appbar .ln-brand__sub {{ display: none; }}
+}}
+[class*="st-key-ln-topbar"] {{
+    border-bottom: 1px solid var(--ln-border);
+    padding: 0.1rem 0 0.5rem 0;
+    margin-bottom: 0.9rem;
+}}
+/* タブ（画面ごと切り替えるボタン） */
+[class*="st-key-ln-tabs"] .stButton > button {{
+    border-radius: 6px 6px 0 0;
+    border-bottom-width: 2px;
+    font-size: 0.9rem;
+    font-weight: 600;
+}}
+
+/* ---------- 左ナビ（自前の2列レイアウト） ---------- */
+[class*="st-key-ln-nav"] {{
+    background-color: var(--ln-panel);
+    border: 1px solid var(--ln-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.7rem 0.9rem 0.7rem;
+    position: sticky;
+    top: 0.5rem;
+}}
+[class*="st-key-ln-nav"] .stButton > button {{
+    text-align: left;
+    justify-content: flex-start;
+    font-size: 0.85rem;
+    padding: 0.28rem 0.6rem;
+}}
+[class*="st-key-ln-nav"] h3 {{
+    font-size: 0.95rem;
+    margin: 0.6rem 0 0.3rem 0;
+    color: var(--ln-muted);
+    letter-spacing: 0.08em;
+}}
+
 /* ---------- セクション見出し ---------- */
 .ln-section {{
     display: flex;
@@ -466,6 +513,17 @@ def apply_styles() -> None:
 def escape_html(value: str | None) -> str:
     """HTMLへ埋め込む前にユーザー入力をエスケープする。"""
     return html.escape(str(value or ""), quote=True)
+
+
+def render_app_bar() -> None:
+    """画面上部のアプリ名を描画する（タブや設定ボタンと同じ行に置く）。"""
+    st.markdown(
+        '<div class="ln-appbar">'
+        '<span class="ln-brand__name">LIST NEXUS</span>'
+        '<span class="ln-brand__sub">SHAREPOINT LIST LAUNCHER</span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_brand() -> None:
