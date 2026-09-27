@@ -347,16 +347,33 @@ _CSS = f"""
     min-height: 2rem;
 }}
 
+/* ---------- グループの区切り ----------
+   グループごとに1つの塊として見えるよう、上端に線を引き、
+   左側にアクセント、下に余白を取る。 */
+[class*="st-key-ln-group-"] {{
+    border-top: 1px solid rgba(34, 211, 238, 0.4);
+    border-left: 2px solid rgba(34, 211, 238, 0.22);
+    border-radius: 8px 0 0 8px;
+    background: linear-gradient(180deg, rgba(34, 211, 238, 0.06), transparent 45%);
+    padding: 0.3rem 0.4rem 0.5rem 0.55rem;
+    margin: 0.35rem 0 1.6rem 0;
+}}
+/* グループ内の最後の行は下線を引かない（枠の下辺と二重にならないように） */
+[class*="st-key-ln-group-"] > div > div:last-child [class*="st-key-ln-row-"] {{
+    border-bottom: none;
+}}
+
 /* ---------- グループ見出し ---------- */
 .ln-group-bar {{
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 1rem;
-    font-weight: 700;
+    align-items: baseline;
+    gap: 0.6rem;
+    font-size: 1.35rem;
+    font-weight: 800;
     color: var(--ln-accent);
-    letter-spacing: 0.06em;
-    padding: 0.1rem 0;
+    letter-spacing: 0.08em;
+    padding: 0.15rem 0 0.25rem 0;
+    text-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
 }}
 
 /* ---------- サイドバーのグループ一覧 ---------- */

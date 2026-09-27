@@ -1187,35 +1187,37 @@ def render_header(items: list[SharePointList]) -> None:
 # ----------------------------------------------------------------------
 def render_group_section(
     repository: ListRepository,
+    index: int,
     group_name: str,
     group_items: list[SharePointList],
     group_all: list[SharePointList],
 ) -> None:
-    """グループ見出し（折りたたみ・削除つき）とその中身を描画する。"""
+    """グループ見出し（折りたたみ・削除つき）とその中身を、1つの塊として描画する。"""
     collapsed = group_name in st.session_state["collapsed_groups"]
 
-    toggle_col, heading_col, delete_col = st.columns(
-        [0.35, 9, 0.45], vertical_alignment="center"
-    )
-    toggle_col.button(
-        ":material/chevron_right:" if collapsed else ":material/expand_more:",
-        key=f"group_toggle_{group_name}",
-        help="このグループを開く / 閉じる",
-        on_click=toggle_group,
-        args=(group_name,),
-    )
-    with heading_col:
-        render_group_bar(group_name, len(group_all))
-    delete_col.button(
-        ":material/delete_sweep:",
-        key=f"group_delete_{group_name}",
-        help=f"「{group_name}」の{len(group_all)}件をまとめて削除します",
-        on_click=open_bulk_delete_dialog,
-        args=([item.id for item in group_all], f"グループ「{group_name}」の "),
-    )
+    with st.container(key=f"ln-group-{index}"):
+        toggle_col, heading_col, delete_col = st.columns(
+            [0.35, 9, 0.45], vertical_alignment="center"
+        )
+        toggle_col.button(
+            ":material/chevron_right:" if collapsed else ":material/expand_more:",
+            key=f"group_toggle_{group_name}",
+            help="このグループを開く / 閉じる",
+            on_click=toggle_group,
+            args=(group_name,),
+        )
+        with heading_col:
+            render_group_bar(group_name, len(group_all))
+        delete_col.button(
+            ":material/delete_sweep:",
+            key=f"group_delete_{group_name}",
+            help=f"「{group_name}」の{len(group_all)}件をまとめて削除します",
+            on_click=open_bulk_delete_dialog,
+            args=([item.id for item in group_all], f"グループ「{group_name}」の "),
+        )
 
-    if not collapsed:
-        render_items(repository, group_items)
+        if not collapsed:
+            render_items(repository, group_items)
 
 
 def render_body(repository: ListRepository, items: list[SharePointList]) -> None:
@@ -1278,8 +1280,8 @@ def render_body(repository: ListRepository, items: list[SharePointList]) -> None
             args=(all_names, True),
         )
 
-        for name, group_items in shown_groups:
-            render_group_section(repository, name, group_items, group_items)
+        for index, (name, group_items) in enumerate(shown_groups):
+            render_group_section(repository, index, name, group_items, group_items)
 
         render_pager(len(shown_groups), len(groups), unit="グループ")
         return
